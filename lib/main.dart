@@ -24,7 +24,7 @@ class CobbleApp extends StatelessWidget {
         useMaterial3: true,
         colorScheme: base,
         scaffoldBackgroundColor: const Color(0xFF0E1116),
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           color: const Color(0xFF171B22),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),
@@ -567,28 +567,31 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: _quality,
-                    items: const [
-                      DropdownMenuItem(
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment<String>(
                         value: 'automatic',
-                        child: Text('Automatic'),
+                        label: Text('Automatic'),
                       ),
-                      DropdownMenuItem(value: 'high', child: Text('High')),
-                      DropdownMenuItem(
+                      ButtonSegment<String>(
+                        value: 'high',
+                        label: Text('High'),
+                      ),
+                      ButtonSegment<String>(
                         value: 'standard',
-                        child: Text('Standard'),
+                        label: Text('Standard'),
                       ),
                     ],
-                    onChanged: _loading
+                    selected: <String>{_quality},
+                    onSelectionChanged: _loading
                         ? null
-                        : (value) {
-                            if (value == null) {
-                              return;
-                            }
+                        : (selection) {
+                            final value = selection.first;
                             setState(() => _quality = value);
                             unawaited(_saveSettings());
                           },
+                    multiSelectionEnabled: false,
+                    showSelectedIcon: false,
                   ),
                   const SizedBox(height: 12),
                   const Text(
@@ -610,41 +613,40 @@ class _SettingsPageState extends State<SettingsPage> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 8),
-                  RadioListTile<String>(
-                    value: 'gallery',
-                    groupValue: _saveMode,
-                    onChanged: _loading
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment<String>(
+                        value: 'gallery',
+                        icon: Icon(Icons.photo_library_outlined),
+                        label: Text('Device / Gallery'),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'custom',
+                        icon: Icon(Icons.folder_open_rounded),
+                        label: Text('Custom location'),
+                      ),
+                    ],
+                    selected: <String>{_saveMode},
+                    onSelectionChanged: _loading
                         ? null
-                        : (value) {
-                            if (value == null) {
-                              return;
-                            }
-                            setState(() => _saveMode = value);
-                            unawaited(_saveSettings());
-                          },
-                    title: const Text('Device / Gallery'),
-                    subtitle: const Text(
-                      'Save with MediaStore to Movies/Screen Recorder so the video appears in normal media apps.',
-                    ),
-                  ),
-                  RadioListTile<String>(
-                    value: 'custom',
-                    groupValue: _saveMode,
-                    onChanged: _loading
-                        ? null
-                        : (value) async {
-                            if (value == null) {
-                              return;
-                            }
+                        : (selection) async {
+                            final value = selection.first;
                             setState(() => _saveMode = value);
                             await _saveSettings();
-                            if (_customLocationDescription == 'Not selected') {
+                            if (value == 'custom' &&
+                                _customLocationDescription == 'Not selected') {
                               await _chooseLocation();
                             }
                           },
-                    title: const Text('Custom location'),
-                    subtitle: Text(_customLocationDescription),
+                    multiSelectionEnabled: false,
+                    showSelectedIcon: false,
                   ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Device / Gallery saves with MediaStore to Movies/Screen Recorder so the video appears in normal media apps.',
+                  ),
+                  const SizedBox(height: 8),
+                  Text('Custom folder: $_customLocationDescription'),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
                     onPressed: _loading ? null : _chooseLocation,
@@ -696,7 +698,7 @@ class _StatusDot extends StatelessWidget {
         boxShadow: [
           BoxShadow(
             color: (active ? const Color(0xFFFF4D4F) : const Color(0xFF4CAF50))
-                .withOpacity(0.35),
+                .withValues(alpha: 0.35),
             blurRadius: 14,
             spreadRadius: 1,
           ),
