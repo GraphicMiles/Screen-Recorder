@@ -31,11 +31,11 @@ jobs:
       - name: Flutter analyze
         run: flutter analyze
 
-      - name: Build debug APK
-        run: flutter build apk --debug
+      - name: Build optimized release APK
+        run: flutter build apk --release --target-platform android-arm,android-arm64 --tree-shake-icons
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cobble-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: cobble-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk

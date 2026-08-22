@@ -83,9 +83,14 @@ Java Native Layer
 
 ```bash
 flutter pub get
-flutter build apk --debug
+flutter build apk --release --target-platform android-arm,android-arm64 --tree-shake-icons
 ```
+
+This keeps a single APK, but trims it for real Android phones by:
+- using a release build instead of debug
+- tree-shaking Material icons
+- excluding x86_64 emulator libraries from the shipped artifact
 
 ## GitHub Actions
 
-The workflow in `.github/workflows/android-apk.yml` builds a debug APK and uploads it as an artifact on every push to `main`.
+The workflow in `.github/workflows/android-apk.yml` builds an optimized single release APK and uploads it as an artifact on every push to `main`.
