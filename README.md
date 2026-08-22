@@ -1,13 +1,39 @@
-# Screen-Recorder-
-This project enables recording of either the entire mobile screen or the screen of a specific application (APK).
+# Screen Recorder
 
+This repository now builds a lightweight native Android screen recorder focused on stability and small APK size.
 
-## 🌳 Environment
-Android Studio verison used : ``Android Studio Ladybug | 2024.2.2 Patch 3``
+## Included
 
+- Native Android UI
+- MediaProjection + VirtualDisplay + MediaCodec + MediaMuxer
+- MP4 + H.264 recording
+- MediaStore saving by default
+- Optional SAF custom save folder
+- Foreground service for continued recording
+- Quick Settings tile fallback for reliable global control
 
-## 🖼️ OutPut Screens
+## Important Android limitation
 
-| Notification Permission | Projection Permission | Record Screen | 
-|-------------------------|-----------------------|---------------|
-| <img src="screenshots/notification_permission.png" width="250"> | <img src="screenshots/projection_permission.png" width="250"> | <video src="https://github.com/RonikLimbani/Screen-Recorder/blob/main/screenshots/screen_recording.mp4" width="250"> |
+A truly invisible system-wide triple-tap detector is not available to ordinary Android apps without overlays or elevated privileges.
+
+So this build uses:
+
+- local triple-tap while the app screen is open
+- Quick Settings tile for reliable global control
+- foreground notification stop action while recording
+
+## Output location
+
+Default saved recordings go to:
+
+- `Movies/Screen Recorder/`
+
+## Build locally
+
+```bash
+./gradlew :app:assembleRelease
+```
+
+## GitHub Actions
+
+The workflow builds a single installable release APK and uploads it as `screen-recorder-release-apk`.
