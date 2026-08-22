@@ -26,7 +26,7 @@ class Optic {
 TextStyle micro(Color c, {double ls = 2.4, double fs = 9}) =>
     TextStyle(fontFamily: Optic.mono, fontSize: fs, letterSpacing: ls, color: c);
 
-String two(int n) => n.toString().padStart(2, '0');
+String two(int n) => n.toString().padLeft(2, '0');
 
 String fmtMs(int ms) {
   final s = ms ~/ 1000;
@@ -300,7 +300,7 @@ class _HomeScreenState extends State<HomeScreen> {
               left: 0,
               right: 0,
               child: Center(
-                child: Text(flash!, micro(Optic.amb, ls: 3)),
+                child: Text(flash!, style: micro(Optic.amb, ls: 3)),
               ),
             ),
         ],
@@ -315,7 +315,7 @@ class _HomeScreenState extends State<HomeScreen> {
         children: [
           CustomPaint(size: const Size(17, 17), painter: const LogoPainter(Optic.ink)),
           const SizedBox(width: 9),
-          Text('OPTIC SR', micro(Optic.mut, ls: 3)),
+          Text('OPTIC SR', style: micro(Optic.mut, ls: 3)),
           const Spacer(),
           Container(
             width: 7,
@@ -385,7 +385,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     const SizedBox(height: 6),
                     Text(
                       stateLabel,
-                      micro(active && status['state'] == 'RECORDING'
+                      style: micro(active && status['state'] == 'RECORDING'
                           ? Optic.rec
                           : Optic.mut, ls: 3.4),
                     ),
@@ -398,8 +398,8 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('H.264 · MP4', micro(Optic.dim, ls: 1.6)),
-              Text(save == 'CUSTOM' ? 'CUSTOM' : 'GALLERY', micro(Optic.dim, ls: 1.6)),
+              Text('H.264 · MP4', style: micro(Optic.dim, ls: 1.6)),
+              Text(save == 'CUSTOM' ? 'CUSTOM' : 'GALLERY', style: micro(Optic.dim, ls: 1.6)),
             ],
           ),
           const SizedBox(height: 14),
@@ -422,7 +422,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           border: Border.all(color: Optic.line2),
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Text('${clips.length}', micro(Optic.mut, fs: 7.5, ls: 1)),
+                        child: Text('${clips.length}', style: micro(Optic.mut, fs: 7.5, ls: 1)),
                       ),
                     ),
                   ],
@@ -458,7 +458,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 14),
           Text(
             active ? 'TAP TO STOP & SAVE' : 'TAP SHUTTER TO RECORD',
-            micro(Optic.dim, ls: 3),
+            style: micro(Optic.dim, ls: 3),
           ),
         ],
       ),
@@ -493,15 +493,15 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('CLIPS', micro(Optic.ink, ls: 3, fs: 11)),
+              Text('CLIPS', style: micro(Optic.ink, ls: 3, fs: 11)),
               Text('${clips.length} · ${totalMb.toStringAsFixed(1)} MB',
-                  micro(Optic.mut, ls: 1.6)),
+                  style: micro(Optic.mut, ls: 1.6)),
             ],
           ),
           const SizedBox(height: 8),
           Expanded(
             child: clips.isEmpty
-                ? Center(child: Text('NO CLIPS YET', micro(Optic.dim, ls: 2)))
+                ? Center(child: Text('NO CLIPS YET', style: micro(Optic.dim, ls: 2)))
                 : ListView.builder(
                     itemCount: clips.length,
                     itemBuilder: (_, i) {
@@ -522,7 +522,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           child: Row(
                             children: [
-                              Text(two(i + 1), micro(Optic.dim)),
+                              Text(two(i + 1), style: micro(Optic.dim)),
                               const SizedBox(width: 12),
                               Container(
                                 width: 74,
@@ -553,7 +553,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     const SizedBox(height: 4),
                                     Text(
                                       '${mb.toStringAsFixed(1)} MB · ${c['locationLabel'] ?? ''}',
-                                      micro(Optic.mut, ls: 1),
+                                      style: micro(Optic.mut, ls: 1),
                                     ),
                                   ],
                                 ),
@@ -593,8 +593,8 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('SETUP', micro(Optic.ink, ls: 3, fs: 11)),
-              Text('SR-03 · V0.4', micro(Optic.mut, ls: 1.6)),
+              Text('SETUP', style: micro(Optic.ink, ls: 3, fs: 11)),
+              Text('SR-03 · V0.4', style: micro(Optic.mut, ls: 1.6)),
             ],
           ),
           const SizedBox(height: 8),
@@ -618,13 +618,13 @@ class _HomeScreenState extends State<HomeScreen> {
               refresh();
             },
           )),
-          _srow('QS TILE', Text('ADD IN QUICK SETTINGS', micro(Optic.mut, ls: 1.6))),
+          _srow('QS TILE', Text('ADD IN QUICK SETTINGS', style: micro(Optic.mut, ls: 1.6))),
           _srow('DEBUG LOG', GestureDetector(
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const LogsPage())),
-            child: Text('VIEW', micro(Optic.ink, ls: 2)),
+            child: Text('VIEW', style: micro(Optic.ink, ls: 2)),
           )),
-          _srow('AUDIO', Text('NOT CAPTURED', micro(Optic.dim, ls: 1.6))),
+          _srow('AUDIO', Text('NOT CAPTURED', style: micro(Optic.dim, ls: 1.6))),
         ],
       ),
     );
@@ -637,7 +637,7 @@ class _HomeScreenState extends State<HomeScreen> {
           border: Border(top: BorderSide(color: Optic.line))),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [Text(label, micro(Optic.mut, ls: 2.2)), right],
+        children: [Text(label, style: micro(Optic.mut, ls: 2.2)), right],
       ),
     );
   }
@@ -664,7 +664,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     : null,
               ),
               child: Text(opts[i][0],
-                  micro(on ? Optic.bg : Optic.mut, ls: 1.4, fs: 8)),
+                  style: micro(on ? Optic.bg : Optic.mut, ls: 1.4, fs: 8)),
             ),
           );
         }),
@@ -698,7 +698,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       height: 2,
                       color: on ? Optic.ink : Colors.transparent),
                   const SizedBox(height: 6),
-                  Text(labels[i], micro(on ? Optic.ink : Optic.dim, ls: 2.8)),
+                  Text(labels[i], style: micro(on ? Optic.ink : Optic.dim, ls: 2.8)),
                   const SizedBox(height: 6),
                 ],
               ),
@@ -730,12 +730,12 @@ class LogsPage extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(22, 16, 22, 8),
                   child: GestureDetector(
                     onTap: () => Navigator.of(context).pop(),
-                    child: Text('‹ BACK', micro(Optic.mut, ls: 2.4)),
+                    child: Text('‹ BACK', style: micro(Optic.mut, ls: 2.4)),
                   ),
                 ),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(22, 8, 22, 12),
-                  child: Text('DEBUG LOG', micro(Optic.ink, ls: 3, fs: 11)),
+                  child: Text('DEBUG LOG', style: micro(Optic.ink, ls: 3, fs: 11)),
                 ),
                 Expanded(
                   child: SingleChildScrollView(
