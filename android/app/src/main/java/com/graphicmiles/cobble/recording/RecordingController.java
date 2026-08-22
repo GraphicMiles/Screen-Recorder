@@ -3,14 +3,8 @@ package com.graphicmiles.cobble.recording;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 
 import androidx.core.content.ContextCompat;
-
-import java.util.HashMap;
-import java.util.Map;
-
-import io.flutter.plugin.common.EventChannel;
 
 public final class RecordingController {
     public enum State {
@@ -23,6 +17,11 @@ public final class RecordingController {
     }
 
     public static final String PREFS_NAME = "cobble_prefs";
+    public static final String ACTION_RECORDING_EVENT = "com.graphicmiles.cobble.RECORDING_EVENT";
+    public static final String EXTRA_TYPE = "type";
+    public static final String EXTRA_MESSAGE = "message";
+    public static final String EXTRA_STATE = "state";
+
     private static final String KEY_QUALITY = "video_quality";
 
     private static volatile State currentState = State.IDLE;
@@ -30,17 +29,24 @@ public final class RecordingController {
     private static volatile String lastError = null;
     private static volatile String lastSavedUri = null;
     private static volatile long updatedAtMs = System.currentTimeMillis();
-    private static EventChannel.EventSink eventSink;
 
     private RecordingController() {
     }
 
-    public static synchronized void setEventSink(EventChannel.EventSink sink) {
-        eventSink = sink;
-    }
-
     public static synchronized State getCurrentState() {
         return currentState;
+    }
+
+    public static synchronized String getLastError() {
+        return lastError == null ? "" : lastError;
+    }
+
+    public static synchronized String getLastSavedUri() {
+        return lastSavedUri == null ? "" : lastSavedUri;
+    }
+
+    public static synchronized long getUpdatedAtMs() {
+        return updatedAtMs;
     }
 
     public static synchronized void startService(Context context, int resultCode, Intent data) {
@@ -62,7 +68,7 @@ public final class RecordingController {
         currentState = newState;
         lastMessage = message;
         updatedAtMs = System.currentTimeMillis();
-        emit(buildEvent("recordingStateChanged", message));
+        emit(context, "recordingStateChanged", message);
     }
 
     public static synchronized void reportStarted(Context context) {
@@ -70,26 +76,23 @@ public final class RecordingController {
         lastMessage = "Recording";
         lastError = null;
         updatedAtMs = System.currentTimeMillis();
-        emit(buildEvent("recordingStarted", "Recording started."));
+        emit(context, "recordingStarted", "Recording started.");
     }
 
     public static synchronized void reportStopped(Context context, String message) {
         currentState = State.STOPPING;
         lastMessage = message;
         updatedAtMs = System.currentTimeMillis();
-        emit(buildEvent("recordingStopped", message));
+        emit(context, "recordingStopped", message);
     }
 
     public static synchronized void reportSaved(Context context, Uri uri, String displayName) {
         currentState = State.IDLE;
         lastSavedUri = uri == null ? null : uri.toString();
         lastMessage = "Saved to device";
+        lastError = null;
         updatedAtMs = System.currentTimeMillis();
-
-        Map<String, Object> event = buildEvent("recordingSaved", "Recording saved to device.");
-        event.put("uri", lastSavedUri);
-        event.put("displayName", displayName);
-        emit(event);
+        emit(context, "recordingSaved", "Recording saved to device.");
     }
 
     public static synchronized void reportError(Context context, String message) {
@@ -97,44 +100,14 @@ public final class RecordingController {
         lastError = message;
         lastMessage = message;
         updatedAtMs = System.currentTimeMillis();
-        emit(buildEvent("recordingError", message));
+        emit(context, "recordingError", message);
     }
 
-    public static synchronized void moveToIdle() {
+    public static synchronized void moveToIdle(Context context) {
         currentState = State.IDLE;
         lastMessage = "Ready";
         updatedAtMs = System.currentTimeMillis();
-    }
-
-    public static synchronized Map<String, Object> getStatus(Context context) {
-        Map<String, Object> status = new HashMap<>();
-        status.put("state", currentState.name());
-        status.put("stateLabel", stateLabel(currentState));
-        status.put("message", lastMessage);
-        status.put("lastError", lastError == null ? "" : lastError);
-        status.put("lastSavedUri", lastSavedUri == null ? "" : lastSavedUri);
-        status.put("updatedAtMs", updatedAtMs);
-        status.put("supportsGlobalTripleTap", false);
-        status.put(
-                "globalTapSupportMessage",
-                "Android does not expose invisible system-wide raw triple-tap detection to ordinary apps without overlays or elevated privileges. Cobble uses a Quick Settings tile and the recording notification as the reliable global fallback."
-        );
-        status.put("requiresPerSessionCaptureConsent", Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE);
-        return status;
-    }
-
-    public static synchronized Map<String, Object> getSettings(Context context) {
-        StorageManager storageManager = new StorageManager(context);
-        Map<String, Object> settings = new HashMap<>();
-        String quality = getQualityPreset(context);
-        settings.put("quality", quality);
-        settings.put("qualityLabel", qualityLabel(quality));
-        settings.put("saveMode", StorageManager.getSaveMode(context));
-        settings.put("saveModeLabel", storageManager.getSaveModeLabel());
-        settings.put("customLocationDescription", storageManager.getCustomLocationDescription());
-        settings.put("audioMode", "none");
-        settings.put("audioModeLabel", "No audio");
-        return settings;
+        emit(context, "recordingIdle", "Ready");
     }
 
     public static synchronized String getQualityPreset(Context context) {
@@ -157,17 +130,11 @@ public final class RecordingController {
                 .apply();
     }
 
-    private static String qualityLabel(String quality) {
-        if ("high".equals(quality)) {
-            return "High";
-        }
-        if ("standard".equals(quality)) {
-            return "Standard";
-        }
-        return "Automatic";
+    public static String getQualityLabel(Context context) {
+        return qualityLabel(getQualityPreset(context));
     }
 
-    private static String stateLabel(State state) {
+    public static String getStateLabel(State state) {
         switch (state) {
             case STARTING:
                 return "Preparing";
@@ -185,19 +152,22 @@ public final class RecordingController {
         }
     }
 
-    private static Map<String, Object> buildEvent(String type, String message) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("type", type);
-        payload.put("message", message);
-        payload.put("state", currentState.name());
-        payload.put("stateLabel", stateLabel(currentState));
-        payload.put("updatedAtMs", updatedAtMs);
-        return payload;
+    private static String qualityLabel(String quality) {
+        if ("high".equals(quality)) {
+            return "High";
+        }
+        if ("standard".equals(quality)) {
+            return "Standard";
+        }
+        return "Automatic";
     }
 
-    private static void emit(Map<String, Object> payload) {
-        if (eventSink != null) {
-            eventSink.success(payload);
-        }
+    private static void emit(Context context, String type, String message) {
+        Intent intent = new Intent(ACTION_RECORDING_EVENT);
+        intent.setPackage(context.getPackageName());
+        intent.putExtra(EXTRA_TYPE, type);
+        intent.putExtra(EXTRA_MESSAGE, message);
+        intent.putExtra(EXTRA_STATE, currentState.name());
+        context.sendBroadcast(intent);
     }
 }

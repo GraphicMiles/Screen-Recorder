@@ -1,9 +1,8 @@
 <resources>
-    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+    <style name="Theme.Cobble" parent="Theme.AppCompat.DayNight.DarkActionBar">
         <item name="android:windowBackground">@color/launch_background</item>
-    </style>
-
-    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
-        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="colorPrimary">#2F6BFF</item>
+        <item name="colorPrimaryDark">#1A4CCC</item>
+        <item name="colorAccent">#2F6BFF</item>
     </style>
 </resources>

@@ -8,7 +8,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.PixelFormat;
+import android.content.pm.ServiceInfo;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.MediaCodec;
@@ -53,7 +53,6 @@ public class ScreenRecordingService extends Service {
     private static final int NOTIFICATION_ID = 4001;
 
     private final Object muxerLock = new Object();
-    private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
 
     private ExecutorService executor;
     private StorageManager storageManager;
@@ -79,13 +78,8 @@ public class ScreenRecordingService extends Service {
     private final MediaProjection.Callback projectionCallback = new MediaProjection.Callback() {
         @Override
         public void onStop() {
-            if (!stopInProgress) {
-                executor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        stopRecording("Screen-capture permission was revoked by Android.");
-                    }
-                });
+            if (!stopInProgress && executor != null) {
+                executor.execute(() -> stopRecording("Screen-capture permission was revoked by Android."));
             }
         }
     };
@@ -107,13 +101,11 @@ public class ScreenRecordingService extends Service {
             }
             int newRotation = display.getRotation();
             if (newRotation != captureRotation && !stopInProgress
-                    && RecordingController.getCurrentState() == RecordingController.State.RECORDING) {
-                executor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        stopRecording("Recording stopped after device rotation to keep the MP4 orientation correct.");
-                    }
-                });
+                    && RecordingController.getCurrentState() == RecordingController.State.RECORDING
+                    && executor != null) {
+                executor.execute(() -> stopRecording(
+                        "Recording stopped after device rotation to keep the MP4 orientation correct."
+                ));
             }
         }
     };
@@ -136,24 +128,13 @@ public class ScreenRecordingService extends Service {
             return START_NOT_STICKY;
         }
 
-        final String action = intent.getAction();
-        if (ACTION_START.equals(action)) {
+        if (ACTION_START.equals(intent.getAction())) {
             final int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
-            final Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
-            executor.execute(new Runnable() {
-                @Override
-                public void run() {
-                    startRecording(resultCode, resultData);
-                }
-            });
-        } else if (ACTION_STOP.equals(action)) {
+            final Intent resultData = getResultData(intent);
+            executor.execute(() -> startRecording(resultCode, resultData));
+        } else if (ACTION_STOP.equals(intent.getAction())) {
             final String reason = intent.getStringExtra(EXTRA_STOP_REASON);
-            executor.execute(new Runnable() {
-                @Override
-                public void run() {
-                    stopRecording(reason == null ? "Stopping recording." : reason);
-                }
-            });
+            executor.execute(() -> stopRecording(reason == null ? "Stopping recording." : reason));
         }
         return START_NOT_STICKY;
     }
@@ -173,6 +154,13 @@ public class ScreenRecordingService extends Service {
         super.onDestroy();
     }
 
+    private Intent getResultData(Intent intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            return intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent.class);
+        }
+        return intent.getParcelableExtra(EXTRA_RESULT_DATA);
+    }
+
     private void startRecording(int resultCode, Intent resultData) {
         if (RecordingController.getCurrentState() == RecordingController.State.RECORDING
                 || RecordingController.getCurrentState() == RecordingController.State.STARTING) {
@@ -180,7 +168,7 @@ public class ScreenRecordingService extends Service {
         }
 
         RecordingController.updateState(this, RecordingController.State.STARTING, "Preparing recorder");
-        startForeground(NOTIFICATION_ID, buildNotification("Preparing recorder", true));
+        startForegroundWithProjectionType(buildNotification("Preparing recorder", true));
 
         try {
             if (mediaProjectionManager == null || resultData == null || resultCode != Activity.RESULT_OK) {
@@ -216,7 +204,6 @@ public class ScreenRecordingService extends Service {
             videoEncoder.setCallback(new MediaCodec.Callback() {
                 @Override
                 public void onInputBufferAvailable(MediaCodec codec, int index) {
-                    // Surface input: nothing to do here.
                 }
 
                 @Override
@@ -292,7 +279,7 @@ public class ScreenRecordingService extends Service {
 
             stopInProgress = false;
             RecordingController.reportStarted(this);
-            startForeground(NOTIFICATION_ID, buildNotification("Recording in progress", true));
+            startForegroundWithProjectionType(buildNotification("Recording in progress", true));
         } catch (Exception error) {
             handleFailure("Could not start recording.", error);
         }
@@ -320,13 +307,15 @@ public class ScreenRecordingService extends Service {
 
         releaseResources(true);
         RecordingController.updateState(this, RecordingController.State.SAVING, "Saving video");
-        startForeground(NOTIFICATION_ID, buildNotification("Saving video", true));
+        startForegroundWithProjectionType(buildNotification("Saving video", true));
 
         try {
             Map<String, Object> saved = storageManager.finalizeRecording(tempFile);
             String uriString = saved.get("uri") == null ? null : saved.get("uri").toString();
             String displayName = saved.get("displayName") == null ? "Recording" : saved.get("displayName").toString();
-            RecordingController.reportSaved(this, uriString == null ? null : android.net.Uri.parse(uriString), displayName);
+            RecordingController.reportSaved(this,
+                    uriString == null ? null : android.net.Uri.parse(uriString),
+                    displayName);
         } catch (Exception error) {
             handleSaveFailure(error);
             return;
@@ -339,7 +328,7 @@ public class ScreenRecordingService extends Service {
     private void handleSaveFailure(Exception error) {
         storageManager.cleanupFailedRecording(tempFile);
         RecordingController.reportError(this, "Recording finished but could not be saved: " + error.getMessage());
-        RecordingController.moveToIdle();
+        RecordingController.moveToIdle(this);
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
@@ -350,7 +339,7 @@ public class ScreenRecordingService extends Service {
         storageManager.cleanupFailedRecording(tempFile);
         releaseResources(true);
         RecordingController.reportError(this, message + " " + error.getMessage());
-        RecordingController.moveToIdle();
+        RecordingController.moveToIdle(this);
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
@@ -432,6 +421,18 @@ public class ScreenRecordingService extends Service {
         mediaProjection = null;
     }
 
+    private void startForegroundWithProjectionType(Notification notification) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            );
+        } else {
+            startForeground(NOTIFICATION_ID, notification);
+        }
+    }
+
     private Notification buildNotification(String text, boolean includeStopAction) {
         Intent openIntent = new Intent(this, MainActivity.class);
         openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -462,11 +463,7 @@ public class ScreenRecordingService extends Service {
                     stopIntent,
                     pendingIntentFlags()
             );
-            builder.addAction(
-                    android.R.drawable.ic_media_pause,
-                    "Stop",
-                    stopPendingIntent
-            );
+            builder.addAction(android.R.drawable.ic_media_pause, "Stop", stopPendingIntent);
         }
         return builder.build();
     }

@@ -3,63 +3,103 @@ package com.graphicmiles.cobble;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.media.MediaCodecInfo;
-import android.media.MediaCodecList;
 import android.media.projection.MediaProjectionManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
-import android.util.DisplayMetrics;
-import android.view.Display;
-import android.view.WindowManager;
+import android.view.MotionEvent;
+import android.widget.AdapterView;
+import android.widget.Button;
+import android.widget.ListView;
+import android.widget.SimpleAdapter;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
-import androidx.documentfile.provider.DocumentFile;
 
 import com.graphicmiles.cobble.recording.RecordingController;
 import com.graphicmiles.cobble.recording.StorageManager;
+import com.graphicmiles.cobble.recording.TripleTapController;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
-import io.flutter.embedding.android.FlutterActivity;
-import io.flutter.embedding.engine.FlutterEngine;
-import io.flutter.plugin.common.EventChannel;
-import io.flutter.plugin.common.MethodCall;
-import io.flutter.plugin.common.MethodChannel;
-
-public class MainActivity extends FlutterActivity implements MethodChannel.MethodCallHandler {
+public class MainActivity extends AppCompatActivity {
     public static final String ACTION_START_RECORDING_FLOW =
             "com.graphicmiles.cobble.action.START_RECORDING_FLOW";
 
-    private static final String METHOD_CHANNEL = "com.graphicmiles.cobble/recorder";
-    private static final String EVENT_CHANNEL = "com.graphicmiles.cobble/events";
     private static final int REQUEST_SCREEN_CAPTURE = 701;
-    private static final int REQUEST_SAVE_LOCATION = 702;
     private static final int REQUEST_POST_NOTIFICATIONS = 703;
 
-    private MethodChannel.Result pendingScreenCaptureResult;
-    private MethodChannel.Result pendingSaveLocationResult;
+    private final TripleTapController tripleTapController = new TripleTapController();
+    private final List<Map<String, Object>> recordings = new ArrayList<>();
+
     private MediaProjectionManager mediaProjectionManager;
-    private Intent pendingCaptureData;
-    private int pendingCaptureResultCode = Activity.RESULT_CANCELED;
-    private boolean autoStartAfterCaptureGrant = false;
-    private boolean continueCaptureAfterNotificationRequest = false;
+    private TextView statusText;
+    private TextView statusMessageText;
+    private TextView errorText;
+    private TextView settingsSummaryText;
+    private Button toggleButton;
+    private ListView recordingsListView;
+
+    private boolean startAfterNotificationPermission = false;
+    private boolean moveTaskToBackAfterStart = false;
     private boolean autoStartIntentPending = false;
+
+    private final BroadcastReceiver recordingReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String message = intent.getStringExtra(RecordingController.EXTRA_MESSAGE);
+            refreshUi();
+            if (message != null && !message.isEmpty()) {
+                Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
         mediaProjectionManager =
                 (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+
+        statusText = findViewById(R.id.statusText);
+        statusMessageText = findViewById(R.id.statusMessageText);
+        errorText = findViewById(R.id.errorText);
+        settingsSummaryText = findViewById(R.id.settingsSummaryText);
+        toggleButton = findViewById(R.id.toggleButton);
+        Button settingsButton = findViewById(R.id.settingsButton);
+        recordingsListView = findViewById(R.id.recordingsListView);
+        TextView emptyView = findViewById(android.R.id.empty);
+        recordingsListView.setEmptyView(emptyView);
+
+        toggleButton.setOnClickListener(view -> toggleRecording(false));
+        settingsButton.setOnClickListener(view ->
+                startActivity(new Intent(MainActivity.this, SettingsActivity.class)));
+        recordingsListView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @Override
+            public void onItemClick(AdapterView<?> parent, android.view.View view, int position, long id) {
+                if (position >= 0 && position < recordings.size()) {
+                    openRecording(recordings.get(position));
+                }
+            }
+        });
+
         handleLaunchIntent(getIntent());
+        refreshUi();
     }
 
     @Override
@@ -70,184 +110,41 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
     }
 
     @Override
-    public void onPostResume() {
+    protected void onStart() {
+        super.onStart();
+        IntentFilter filter = new IntentFilter(RecordingController.ACTION_RECORDING_EVENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(recordingReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(recordingReceiver, filter);
+        }
+        refreshUi();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        unregisterReceiver(recordingReceiver);
+    }
+
+    @Override
+    protected void onPostResume() {
         super.onPostResume();
+        refreshUi();
         if (autoStartIntentPending) {
             autoStartIntentPending = false;
-            requestScreenCaptureInternal(true, null);
+            requestScreenCapture(true);
         }
-    }
-
-    private void handleLaunchIntent(Intent intent) {
-        autoStartIntentPending = intent != null
-                && ACTION_START_RECORDING_FLOW.equals(intent.getAction())
-                && RecordingController.getCurrentState() == RecordingController.State.IDLE;
     }
 
     @Override
-    public void configureFlutterEngine(@NonNull FlutterEngine flutterEngine) {
-        super.configureFlutterEngine(flutterEngine);
-
-        new MethodChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), METHOD_CHANNEL)
-                .setMethodCallHandler(this);
-
-        new EventChannel(flutterEngine.getDartExecutor().getBinaryMessenger(), EVENT_CHANNEL)
-                .setStreamHandler(new EventChannel.StreamHandler() {
-                    @Override
-                    public void onListen(Object arguments, EventChannel.EventSink events) {
-                        RecordingController.setEventSink(events);
-                    }
-
-                    @Override
-                    public void onCancel(Object arguments) {
-                        RecordingController.setEventSink(null);
-                    }
-                });
-    }
-
-    @Override
-    public void onMethodCall(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
-        switch (call.method) {
-            case "requestScreenCapture":
-                requestScreenCaptureInternal(false, result);
-                break;
-            case "startRecording":
-                startRecording(result);
-                break;
-            case "stopRecording":
-                RecordingController.stopService(this, "Stopped by user");
-                result.success(true);
-                break;
-            case "getRecordingStatus":
-                result.success(RecordingController.getStatus(this));
-                break;
-            case "getDisplayInfo":
-                result.success(buildDisplayInfo());
-                break;
-            case "chooseSaveLocation":
-                chooseSaveLocation(result);
-                break;
-            case "getSavedRecordings":
-                List<Map<String, Object>> recordings = new StorageManager(this).listSavedRecordings();
-                result.success(recordings);
-                break;
-            case "getSettings":
-                result.success(RecordingController.getSettings(this));
-                break;
-            case "saveSettings":
-                saveSettings(call, result);
-                break;
-            case "openRecording":
-                openRecording(call, result);
-                break;
-            default:
-                result.notImplemented();
-                break;
-        }
-    }
-
-    private void requestScreenCaptureInternal(boolean autoStart, MethodChannel.Result result) {
-        pendingScreenCaptureResult = result;
-        autoStartAfterCaptureGrant = autoStart;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-            continueCaptureAfterNotificationRequest = true;
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
-                    REQUEST_POST_NOTIFICATIONS
-            );
-            return;
-        }
-
-        launchScreenCaptureIntent();
-    }
-
-    private void launchScreenCaptureIntent() {
-        if (mediaProjectionManager == null) {
-            resolveScreenCaptureResult(false, "Screen capture is not available on this device.");
-            return;
-        }
-        try {
-            Intent captureIntent = mediaProjectionManager.createScreenCaptureIntent();
-            startActivityForResult(captureIntent, REQUEST_SCREEN_CAPTURE);
-        } catch (Exception error) {
-            resolveScreenCaptureResult(false, "Could not open Android's screen-capture prompt.");
-        }
-    }
-
-    private void resolveScreenCaptureResult(boolean granted, String message) {
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("granted", granted);
-        payload.put("message", message);
-        if (pendingScreenCaptureResult != null) {
-            pendingScreenCaptureResult.success(payload);
-            pendingScreenCaptureResult = null;
-        }
-    }
-
-    private void startRecording(MethodChannel.Result result) {
-        if (pendingCaptureData == null) {
-            result.error(
-                    "permission_required",
-                    "Screen-capture consent is required before each new recording session.",
-                    null
-            );
-            return;
-        }
-
-        RecordingController.startService(this, pendingCaptureResultCode, pendingCaptureData);
-        pendingCaptureData = null;
-        pendingCaptureResultCode = Activity.RESULT_CANCELED;
-        result.success(true);
-    }
-
-    @SuppressWarnings("unchecked")
-    private void saveSettings(MethodCall call, MethodChannel.Result result) {
-        Map<String, Object> arguments = (Map<String, Object>) call.arguments;
-        if (arguments != null) {
-            String quality = stringValue(arguments.get("quality"));
-            if (quality != null) {
-                RecordingController.setQualityPreset(this, quality);
-            }
-            String saveMode = stringValue(arguments.get("saveMode"));
-            if (saveMode != null) {
-                StorageManager.setSaveMode(this, saveMode);
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            if (tripleTapController.registerTap(System.currentTimeMillis())) {
+                toggleRecording(false);
             }
         }
-        result.success(RecordingController.getSettings(this));
-    }
-
-    private void chooseSaveLocation(MethodChannel.Result result) {
-        pendingSaveLocationResult = result;
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        startActivityForResult(intent, REQUEST_SAVE_LOCATION);
-    }
-
-    @SuppressWarnings("unchecked")
-    private void openRecording(MethodCall call, MethodChannel.Result result) {
-        Map<String, Object> arguments = (Map<String, Object>) call.arguments;
-        String uriValue = arguments == null ? null : stringValue(arguments.get("uri"));
-        if (uriValue == null || uriValue.isEmpty()) {
-            result.error("bad_uri", "No recording URI was provided.", null);
-            return;
-        }
-
-        try {
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setDataAndType(Uri.parse(uriValue), "video/mp4");
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            startActivity(intent);
-            result.success(true);
-        } catch (ActivityNotFoundException error) {
-            result.error("viewer_missing", "No video player is available for MP4 playback.", null);
-        }
+        return super.dispatchTouchEvent(event);
     }
 
     @Override
@@ -257,8 +154,8 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
             @NonNull int[] grantResults
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_POST_NOTIFICATIONS && continueCaptureAfterNotificationRequest) {
-            continueCaptureAfterNotificationRequest = false;
+        if (requestCode == REQUEST_POST_NOTIFICATIONS && startAfterNotificationPermission) {
+            startAfterNotificationPermission = false;
             launchScreenCaptureIntent();
         }
     }
@@ -266,95 +163,167 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-
         if (requestCode == REQUEST_SCREEN_CAPTURE) {
             if (resultCode == Activity.RESULT_OK && data != null) {
-                pendingCaptureResultCode = resultCode;
-                pendingCaptureData = data;
-                resolveScreenCaptureResult(true, "Screen-capture permission granted.");
-                if (autoStartAfterCaptureGrant) {
-                    RecordingController.startService(this, pendingCaptureResultCode, pendingCaptureData);
-                    pendingCaptureData = null;
-                    pendingCaptureResultCode = Activity.RESULT_CANCELED;
+                RecordingController.startService(this, resultCode, data);
+                Toast.makeText(this, "Recording started.", Toast.LENGTH_SHORT).show();
+                if (moveTaskToBackAfterStart) {
                     moveTaskToBack(true);
                 }
             } else {
-                resolveScreenCaptureResult(false, "Screen-capture permission was denied.");
+                Toast.makeText(this, "Screen-capture permission was denied.", Toast.LENGTH_SHORT).show();
             }
-            autoStartAfterCaptureGrant = false;
+            moveTaskToBackAfterStart = false;
+            refreshUi();
+        }
+    }
+
+    private void handleLaunchIntent(Intent intent) {
+        autoStartIntentPending = intent != null
+                && ACTION_START_RECORDING_FLOW.equals(intent.getAction())
+                && RecordingController.getCurrentState() == RecordingController.State.IDLE;
+    }
+
+    private void toggleRecording(boolean backgroundAfterStart) {
+        RecordingController.State state = RecordingController.getCurrentState();
+        boolean active = state == RecordingController.State.RECORDING
+                || state == RecordingController.State.STARTING
+                || state == RecordingController.State.STOPPING
+                || state == RecordingController.State.SAVING;
+        if (active) {
+            RecordingController.stopService(this, "Stopped by user");
+            refreshUi();
+        } else {
+            requestScreenCapture(backgroundAfterStart);
+        }
+    }
+
+    private void requestScreenCapture(boolean backgroundAfterStart) {
+        moveTaskToBackAfterStart = backgroundAfterStart;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            startAfterNotificationPermission = true;
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_POST_NOTIFICATIONS
+            );
             return;
         }
-
-        if (requestCode == REQUEST_SAVE_LOCATION && pendingSaveLocationResult != null) {
-            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
-                Uri treeUri = data.getData();
-                final int flags = data.getFlags() &
-                        (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                try {
-                    getContentResolver().takePersistableUriPermission(treeUri, flags);
-                } catch (SecurityException ignored) {
-                    // Some providers do not grant persistable permissions consistently.
-                }
-                StorageManager.persistTreeUri(this, treeUri);
-                StorageManager.setSaveMode(this, StorageManager.SAVE_MODE_CUSTOM);
-                pendingSaveLocationResult.success(RecordingController.getSettings(this));
-            } else {
-                Map<String, Object> settings = RecordingController.getSettings(this);
-                settings.put("message", "Folder selection was cancelled.");
-                pendingSaveLocationResult.success(settings);
-            }
-            pendingSaveLocationResult = null;
-        }
+        launchScreenCaptureIntent();
     }
 
-    private Map<String, Object> buildDisplayInfo() {
-        Map<String, Object> info = new HashMap<>();
-        DisplayMetrics metrics = new DisplayMetrics();
-        Display display = getDefaultDisplayCompat();
-        if (display != null) {
-            display.getRealMetrics(metrics);
-            info.put("width", metrics.widthPixels);
-            info.put("height", metrics.heightPixels);
-            info.put("densityDpi", metrics.densityDpi);
-            info.put("refreshRate", display.getRefreshRate());
-            info.put("rotation", display.getRotation());
+    private void launchScreenCaptureIntent() {
+        if (mediaProjectionManager == null) {
+            Toast.makeText(this, "Screen capture is not available on this device.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        startActivityForResult(mediaProjectionManager.createScreenCaptureIntent(), REQUEST_SCREEN_CAPTURE);
+    }
+
+    private void refreshUi() {
+        RecordingController.State state = RecordingController.getCurrentState();
+        boolean active = state == RecordingController.State.RECORDING
+                || state == RecordingController.State.STARTING
+                || state == RecordingController.State.STOPPING
+                || state == RecordingController.State.SAVING;
+
+        statusText.setText(String.format(Locale.US, "● %s", RecordingController.getStateLabel(state)));
+        statusText.setTextColor(ContextCompat.getColor(
+                this,
+                active ? R.color.status_recording : R.color.status_ready
+        ));
+
+        statusMessageText.setText(active
+                ? "Local triple-tap here, Quick Settings, or the recording notification can stop the recording."
+                : "Triple-tap here to start while this screen is open. Quick Settings remains the reliable global fallback.");
+
+        String lastError = RecordingController.getLastError();
+        if (lastError != null && !lastError.isEmpty()) {
+            errorText.setText(lastError);
+            errorText.setVisibility(android.view.View.VISIBLE);
         } else {
-            metrics = getResources().getDisplayMetrics();
-            info.put("width", metrics.widthPixels);
-            info.put("height", metrics.heightPixels);
-            info.put("densityDpi", metrics.densityDpi);
-            info.put("refreshRate", 60.0);
-            info.put("rotation", 0);
+            errorText.setVisibility(android.view.View.GONE);
         }
-        info.put("orientation", metrics.widthPixels >= metrics.heightPixels ? "landscape" : "portrait");
-        info.put("preferredH264Encoder", findPreferredH264Encoder());
-        return info;
+
+        toggleButton.setText(active ? "Stop recording" : "Start recording");
+        toggleButton.setEnabled(state != RecordingController.State.STARTING
+                && state != RecordingController.State.STOPPING
+                && state != RecordingController.State.SAVING);
+
+        StorageManager storageManager = new StorageManager(this);
+        settingsSummaryText.setText(String.format(
+                Locale.US,
+                "Quality: %s\nSave location: %s\nCustom folder: %s",
+                RecordingController.getQualityLabel(this),
+                storageManager.getSaveModeLabel(),
+                storageManager.getCustomLocationDescription()
+        ));
+
+        recordings.clear();
+        recordings.addAll(storageManager.listSavedRecordings());
+
+        List<Map<String, String>> rows = new ArrayList<>();
+        for (Map<String, Object> item : recordings) {
+            Map<String, String> row = new HashMap<>();
+            row.put("line1", String.valueOf(item.get("displayName")));
+            row.put(
+                    "line2",
+                    String.format(
+                            Locale.US,
+                            "%s • %s • %s",
+                            String.valueOf(item.get("locationLabel")),
+                            formatTimestamp(item.get("savedAtMs")),
+                            formatBytes(item.get("sizeBytes"))
+                    )
+            );
+            rows.add(row);
+        }
+
+        recordingsListView.setAdapter(new SimpleAdapter(
+                this,
+                rows,
+                R.layout.recording_list_item,
+                new String[]{"line1", "line2"},
+                new int[]{R.id.text1, R.id.text2}
+        ));
     }
 
-    private Display getDefaultDisplayCompat() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return getDisplay();
+    private void openRecording(Map<String, Object> item) {
+        Object rawUri = item.get("uri");
+        if (rawUri == null) {
+            return;
         }
-        WindowManager windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
-        return windowManager == null ? null : windowManager.getDefaultDisplay();
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(Uri.parse(rawUri.toString()), "video/mp4");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(intent);
+        } catch (ActivityNotFoundException error) {
+            Toast.makeText(this, "No video player is available for MP4 playback.", Toast.LENGTH_SHORT).show();
+        }
     }
 
-    private String findPreferredH264Encoder() {
-        MediaCodecList codecList = new MediaCodecList(MediaCodecList.ALL_CODECS);
-        for (MediaCodecInfo codecInfo : codecList.getCodecInfos()) {
-            if (!codecInfo.isEncoder()) {
-                continue;
-            }
-            for (String type : codecInfo.getSupportedTypes()) {
-                if ("video/avc".equalsIgnoreCase(type)) {
-                    return codecInfo.getName();
-                }
-            }
+    private String formatTimestamp(Object raw) {
+        if (!(raw instanceof Number)) {
+            return "Unknown time";
         }
-        return "Unavailable";
+        java.util.Date date = new java.util.Date(((Number) raw).longValue());
+        return new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(date);
     }
 
-    private String stringValue(Object value) {
-        return value == null ? null : value.toString();
+    private String formatBytes(Object raw) {
+        if (!(raw instanceof Number)) {
+            return "size unknown";
+        }
+        double value = ((Number) raw).doubleValue();
+        String[] units = new String[]{"B", "KB", "MB", "GB"};
+        int index = 0;
+        while (value >= 1024d && index < units.length - 1) {
+            value /= 1024d;
+            index += 1;
+        }
+        return String.format(Locale.US, value >= 100 || index == 0 ? "%.0f %s" : "%.1f %s", value, units[index]);
     }
 }

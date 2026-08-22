@@ -1,4 +1,5 @@
 <resources>
     <color name="launch_background">#0E1116</color>
-    <color name="launch_text">#FFFFFF</color>
+    <color name="status_ready">#4CAF50</color>
+    <color name="status_recording">#FF4D4F</color>
 </resources>
