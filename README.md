@@ -1,16 +1,15 @@
 # Screen Recorder
 
-This repository now builds a lightweight native Android screen recorder focused on stability and small APK size.
+A lightweight Android screen recorder with:
 
-## Included
-
-- Native Android UI
-- MediaProjection + VirtualDisplay + MediaCodec + MediaMuxer
-- MP4 + H.264 recording
-- MediaStore saving by default
-- Optional SAF custom save folder
-- Foreground service for continued recording
-- Quick Settings tile fallback for reliable global control
+- Flutter / Dart UI
+- Java native recording engine
+- MediaProjection capture
+- MediaRecorder-based MP4 recording for reliability
+- MediaStore default saving
+- optional SAF custom folder saving
+- foreground service background recording
+- Quick Settings tile fallback for global control
 
 ## Important Android limitation
 
@@ -22,18 +21,13 @@ So this build uses:
 - Quick Settings tile for reliable global control
 - foreground notification stop action while recording
 
-## Output location
-
-Default saved recordings go to:
-
-- `Movies/Screen Recorder/`
-
 ## Build locally
 
 ```bash
-./gradlew :app:assembleRelease
+flutter pub get
+flutter build apk --release --target-platform android-arm,android-arm64 --tree-shake-icons
 ```
 
 ## GitHub Actions
 
-The workflow builds a single installable release APK and uploads it as `screen-recorder-release-apk`.
+The workflow builds a single release APK artifact named `screen-recorder-release-apk`.

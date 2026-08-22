@@ -19,14 +19,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Make Gradle wrapper executable
-        run: chmod +x ./gradlew
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Flutter analyze
+        run: flutter analyze
 
       - name: Build release APK
-        run: ./gradlew :app:assembleRelease
+        run: flutter build apk --release --target-platform android-arm,android-arm64 --tree-shake-icons
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: screen-recorder-release-apk
-          path: app/build/outputs/apk/release/app-release.apk
+          path: build/app/outputs/flutter-apk/app-release.apk
