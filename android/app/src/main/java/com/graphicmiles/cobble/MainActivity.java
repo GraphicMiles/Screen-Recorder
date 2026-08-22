@@ -70,7 +70,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
     }
 
     @Override
-    protected void onPostResume() {
+    public void onPostResume() {
         super.onPostResume();
         if (autoStartIntentPending) {
             autoStartIntentPending = false;

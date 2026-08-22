@@ -1,5 +1,6 @@
 package com.graphicmiles.cobble.recording;
 
+import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
@@ -137,7 +138,7 @@ public class ScreenRecordingService extends Service {
 
         final String action = intent.getAction();
         if (ACTION_START.equals(action)) {
-            final int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, RESULT_CANCELED);
+            final int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
             final Intent resultData = intent.getParcelableExtra(EXTRA_RESULT_DATA);
             executor.execute(new Runnable() {
                 @Override
@@ -182,7 +183,7 @@ public class ScreenRecordingService extends Service {
         startForeground(NOTIFICATION_ID, buildNotification("Preparing recorder", true));
 
         try {
-            if (mediaProjectionManager == null || resultData == null || resultCode != RESULT_OK) {
+            if (mediaProjectionManager == null || resultData == null || resultCode != Activity.RESULT_OK) {
                 throw new IOException("Missing MediaProjection consent result.");
             }
 
