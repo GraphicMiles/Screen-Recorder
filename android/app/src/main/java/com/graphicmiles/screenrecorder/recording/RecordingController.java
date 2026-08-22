@@ -4,6 +4,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.core.content.ContextCompat;
 
@@ -25,6 +27,8 @@ public final class RecordingController {
     public static final String PREFS_NAME = "screen_recorder_prefs";
     private static final String KEY_QUALITY = "video_quality";
 
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
+
     private static volatile State currentState = State.IDLE;
     private static volatile String lastMessage = "Ready";
     private static volatile String lastError = null;
@@ -44,6 +48,7 @@ public final class RecordingController {
     }
 
     public static synchronized void startService(Context context, int resultCode, Intent data) {
+        debug(context, "Requesting foreground recording service start");
         Intent intent = new Intent(context, ScreenRecordingService.class);
         intent.setAction(ScreenRecordingService.ACTION_START);
         intent.putExtra(ScreenRecordingService.EXTRA_RESULT_CODE, resultCode);
@@ -52,6 +57,7 @@ public final class RecordingController {
     }
 
     public static synchronized void stopService(Context context, String reason) {
+        debug(context, "Requesting recording service stop: " + reason);
         Intent intent = new Intent(context, ScreenRecordingService.class);
         intent.setAction(ScreenRecordingService.ACTION_STOP);
         intent.putExtra(ScreenRecordingService.EXTRA_STOP_REASON, reason);
@@ -155,6 +161,24 @@ public final class RecordingController {
                 .edit()
                 .putString(KEY_QUALITY, sanitized)
                 .apply();
+        debug(context, "Quality preset set to: " + sanitized);
+    }
+
+    public static synchronized String getDebugLogs(Context context) {
+        return DebugLogStore.getLogs(context);
+    }
+
+    public static synchronized void clearDebugLogs(Context context) {
+        DebugLogStore.clear(context);
+        emitDebugLine("Logs cleared");
+    }
+
+    public static synchronized void debug(Context context, String message) {
+        emitDebugLine(DebugLogStore.append(context, message, null));
+    }
+
+    public static synchronized void debugError(Context context, String message, Throwable throwable) {
+        emitDebugLine(DebugLogStore.append(context, message, throwable));
     }
 
     private static String qualityLabel(String quality) {
@@ -195,9 +219,18 @@ public final class RecordingController {
         return payload;
     }
 
+    private static void emitDebugLine(String line) {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("type", "debugLog");
+        payload.put("line", line);
+        payload.put("updatedAtMs", System.currentTimeMillis());
+        emit(payload);
+    }
+
     private static void emit(Map<String, Object> payload) {
-        if (eventSink != null) {
-            eventSink.success(payload);
+        final EventChannel.EventSink sink = eventSink;
+        if (sink != null) {
+            MAIN_HANDLER.post(() -> sink.success(payload));
         }
     }
 }

@@ -66,6 +66,7 @@ public class ScreenRecordingService extends Service {
     private final MediaProjection.Callback projectionCallback = new MediaProjection.Callback() {
         @Override
         public void onStop() {
+            RecordingController.debug(ScreenRecordingService.this, "MediaProjection callback onStop fired");
             if (!stopInProgress && executor != null) {
                 executor.execute(() -> stopRecording("Screen-capture permission was revoked by Android."));
             }
@@ -92,6 +93,8 @@ public class ScreenRecordingService extends Service {
                     && !stopInProgress
                     && RecordingController.getCurrentState() == RecordingController.State.RECORDING
                     && executor != null) {
+                RecordingController.debug(ScreenRecordingService.this,
+                        "Display rotation changed from " + captureRotation + " to " + newRotation);
                 executor.execute(() -> stopRecording(
                         "Recording stopped after device rotation to keep the MP4 orientation correct."
                 ));
@@ -109,14 +112,17 @@ public class ScreenRecordingService extends Service {
         displayManager = (DisplayManager) getSystemService(Context.DISPLAY_SERVICE);
         mainHandler = new Handler(getMainLooper());
         createNotificationChannel();
+        RecordingController.debug(this, "ScreenRecordingService created");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null || intent.getAction() == null) {
+            RecordingController.debug(this, "Service started with null intent or action");
             return START_NOT_STICKY;
         }
 
+        RecordingController.debug(this, "Service onStartCommand action=" + intent.getAction());
         if (ACTION_START.equals(intent.getAction())) {
             final int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED);
             final Intent resultData = getResultData(intent);
@@ -136,6 +142,7 @@ public class ScreenRecordingService extends Service {
 
     @Override
     public void onDestroy() {
+        RecordingController.debug(this, "ScreenRecordingService destroyed");
         releaseResources(false);
         if (executor != null) {
             executor.shutdownNow();
@@ -153,13 +160,16 @@ public class ScreenRecordingService extends Service {
     private void startRecording(int resultCode, Intent resultData) {
         if (RecordingController.getCurrentState() == RecordingController.State.RECORDING
                 || RecordingController.getCurrentState() == RecordingController.State.STARTING) {
+            RecordingController.debug(this, "Ignoring duplicate start request");
             return;
         }
 
         RecordingController.updateState(this, RecordingController.State.STARTING, "Preparing recorder");
-        startForegroundWithProjectionType(buildNotification("Preparing recorder", true));
 
         try {
+            startForegroundWithProjectionType(buildNotification("Preparing recorder", true));
+            RecordingController.debug(this, "Foreground notification started for recording service");
+
             if (mediaProjectionManager == null || resultData == null || resultCode != Activity.RESULT_OK) {
                 throw new IOException("Missing MediaProjection consent result.");
             }
@@ -170,17 +180,27 @@ public class ScreenRecordingService extends Service {
                 captureRotation = display.getRotation();
             }
             VideoConfig config = buildVideoConfig(metrics, display);
+            RecordingController.debug(this,
+                    "Display config width=" + config.width
+                            + ", height=" + config.height
+                            + ", density=" + config.densityDpi
+                            + ", fps=" + config.frameRate
+                            + ", bitrate=" + config.bitrate);
 
             tempFile = storageManager.createTempRecordingFile();
+            RecordingController.debug(this, "Temp file: " + tempFile.getAbsolutePath());
+
             mediaRecorder = createMediaRecorder();
             configureRecorder(mediaRecorder, config, tempFile);
             recorderSurface = mediaRecorder.getSurface();
+            RecordingController.debug(this, "MediaRecorder prepared");
 
             mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, resultData);
             if (mediaProjection == null) {
                 throw new IOException("Could not acquire a MediaProjection instance.");
             }
             mediaProjection.registerCallback(projectionCallback, mainHandler);
+            RecordingController.debug(this, "MediaProjection acquired and callback registered");
 
             virtualDisplay = mediaProjection.createVirtualDisplay(
                     "ScreenRecorder",
@@ -195,6 +215,7 @@ public class ScreenRecordingService extends Service {
             if (virtualDisplay == null) {
                 throw new IOException("Could not create a virtual display.");
             }
+            RecordingController.debug(this, "VirtualDisplay created");
 
             if (displayManager != null) {
                 displayManager.registerDisplayListener(displayListener, mainHandler);
@@ -203,6 +224,7 @@ public class ScreenRecordingService extends Service {
             mediaRecorder.start();
             recorderStarted = true;
             stopInProgress = false;
+            RecordingController.debug(this, "MediaRecorder.start() succeeded");
             RecordingController.reportStarted(this);
             RecorderTileService.requestTileRefresh(this);
             startForegroundWithProjectionType(buildNotification("Recording in progress", true));
@@ -213,9 +235,11 @@ public class ScreenRecordingService extends Service {
 
     private void stopRecording(String reason) {
         if (stopInProgress) {
+            RecordingController.debug(this, "Ignoring duplicate stop request");
             return;
         }
         stopInProgress = true;
+        RecordingController.debug(this, "Stopping recording: " + reason);
 
         RecordingController.reportStopped(this, reason);
         RecordingController.updateState(this, RecordingController.State.STOPPING, reason);
@@ -224,9 +248,11 @@ public class ScreenRecordingService extends Service {
         try {
             if (mediaRecorder != null && recorderStarted) {
                 mediaRecorder.stop();
+                RecordingController.debug(this, "MediaRecorder.stop() succeeded");
             }
         } catch (Exception error) {
             stopError = error;
+            RecordingController.debugError(this, "MediaRecorder.stop() failed", error);
         }
         recorderStarted = false;
 
@@ -238,12 +264,12 @@ public class ScreenRecordingService extends Service {
         }
 
         RecordingController.updateState(this, RecordingController.State.SAVING, "Saving video");
-        startForegroundWithProjectionType(buildNotification("Saving video", true));
-
         try {
+            startForegroundWithProjectionType(buildNotification("Saving video", true));
             Map<String, Object> saved = storageManager.finalizeRecording(tempFile);
             String uriString = saved.get("uri") == null ? null : saved.get("uri").toString();
             String displayName = saved.get("displayName") == null ? "Recording" : saved.get("displayName").toString();
+            RecordingController.debug(this, "Recording saved to URI: " + uriString);
             RecordingController.reportSaved(this,
                     uriString == null ? null : Uri.parse(uriString),
                     displayName);
@@ -276,6 +302,7 @@ public class ScreenRecordingService extends Service {
     }
 
     private void handleSaveFailure(Exception error) {
+        RecordingController.debugError(this, "Recording finished but save failed", error);
         storageManager.cleanupFailedRecording(tempFile);
         RecordingController.reportError(this, "Recording finished but could not be saved: " + error.getMessage());
         RecordingController.moveToIdle();
@@ -287,6 +314,7 @@ public class ScreenRecordingService extends Service {
     private void handleFailure(String message, Exception error) {
         stopInProgress = true;
         Log.e(TAG, message, error);
+        RecordingController.debugError(this, message, error);
         storageManager.cleanupFailedRecording(tempFile);
         releaseResources(true);
         RecordingController.reportError(this, message + " " + error.getMessage());

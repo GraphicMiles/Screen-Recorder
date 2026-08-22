@@ -5,7 +5,7 @@
 
     <application
         android:label="Screen Recorder"
-        android:name="${applicationName}"
+        android:name=".ScreenRecorderApplication"
         android:icon="@drawable/ic_recorder"
         android:roundIcon="@drawable/ic_recorder"
         android:allowBackup="true">

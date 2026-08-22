@@ -59,13 +59,16 @@ public class StorageManager {
             throw new IOException("Temporary recording file is missing or empty.");
         }
 
+        RecordingController.debug(context, "Finalizing recording. tempFile=" + tempFile.getAbsolutePath() + ", bytes=" + tempFile.length());
         String displayName = buildDisplayName();
         if (SAVE_MODE_CUSTOM.equals(getSaveMode(context))) {
             Uri treeUri = getTreeUri(context);
             if (treeUri != null) {
+                RecordingController.debug(context, "Saving recording to SAF location");
                 return saveToSaf(tempFile, treeUri, displayName);
             }
         }
+        RecordingController.debug(context, "Saving recording to MediaStore gallery location");
         return saveToMediaStore(tempFile, displayName);
     }
 
@@ -166,6 +169,7 @@ public class StorageManager {
             payload.put("savedAtMs", System.currentTimeMillis());
             payload.put("sizeBytes", tempFile.length());
             cleanupFailedRecording(tempFile);
+            RecordingController.debug(context, "MediaStore save complete: " + itemUri);
             return payload;
         } catch (IOException error) {
             resolver.delete(itemUri, null, null);
@@ -191,6 +195,7 @@ public class StorageManager {
         payload.put("savedAtMs", System.currentTimeMillis());
         payload.put("sizeBytes", tempFile.length());
         cleanupFailedRecording(tempFile);
+        RecordingController.debug(context, "SAF save complete: " + file.getUri());
         return payload;
     }
 

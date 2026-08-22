@@ -50,6 +50,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Map<String, dynamic> _status = const <String, dynamic>{};
   Map<String, dynamic> _settings = const <String, dynamic>{};
   List<Map<String, dynamic>> _recordings = const <Map<String, dynamic>>[];
+  String _debugLogs = '';
   bool _busy = true;
   String? _lastNotice;
   int _tapCount = 0;
@@ -86,6 +87,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _api.getRecordingStatus(),
         _api.getSettings(),
         _api.getSavedRecordings(),
+        _api.getDebugLogs(),
       ]);
       if (!mounted) {
         return;
@@ -94,6 +96,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _status = results[0] as Map<String, dynamic>;
         _settings = results[1] as Map<String, dynamic>;
         _recordings = results[2] as List<Map<String, dynamic>>;
+        _debugLogs = results[3] as String? ?? '';
         _busy = false;
       });
     } catch (error) {
@@ -108,6 +111,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void _handleNativeEvent(Map<String, dynamic> event) {
     final type = event['type']?.toString() ?? 'event';
     final message = event['message']?.toString();
+
+    if (type == 'debugLog') {
+      final line = event['line']?.toString();
+      if (line != null && line.isNotEmpty && mounted) {
+        setState(() {
+          _debugLogs = _debugLogs.isEmpty ? line : '$_debugLogs\n$line';
+        });
+      }
+      return;
+    }
+
     if (message != null && message.isNotEmpty) {
       _lastNotice = message;
       _showSnack(message);
@@ -214,6 +228,21 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       await _api.openRecording(uri);
     } catch (error) {
       _showSnack('Could not open recording: $error');
+    }
+  }
+
+  Future<void> _copyDebugLogs() async {
+    await Clipboard.setData(ClipboardData(text: _debugLogs));
+    _showSnack('Debug logs copied.');
+  }
+
+  Future<void> _clearDebugLogs() async {
+    try {
+      await _api.clearDebugLogs();
+      await _refreshAll(showLoader: false);
+      _showSnack('Debug logs cleared.');
+    } catch (error) {
+      _showSnack('Could not clear logs: $error');
     }
   }
 
@@ -369,6 +398,68 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             _InfoRow(
                               label: 'Audio',
                               value: _settings['audioModeLabel']?.toString() ?? 'No audio',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    'Debug panel',
+                                    style: Theme.of(context).textTheme.titleLarge,
+                                  ),
+                                ),
+                                TextButton.icon(
+                                  onPressed: _debugLogs.trim().isEmpty
+                                      ? null
+                                      : () => unawaited(_copyDebugLogs()),
+                                  icon: const Icon(Icons.copy_all_rounded),
+                                  label: const Text('Copy'),
+                                ),
+                                TextButton.icon(
+                                  onPressed: _debugLogs.trim().isEmpty
+                                      ? null
+                                      : () => unawaited(_clearDebugLogs()),
+                                  icon: const Icon(Icons.delete_outline_rounded),
+                                  label: const Text('Clear'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'If the app crashes, reopen it and copy the logs below.',
+                            ),
+                            const SizedBox(height: 12),
+                            Container(
+                              width: double.infinity,
+                              constraints: const BoxConstraints(minHeight: 120, maxHeight: 240),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF0E1116),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: const Color(0xFF2A2F38)),
+                              ),
+                              child: SingleChildScrollView(
+                                child: SelectableText(
+                                  _debugLogs.trim().isEmpty
+                                      ? 'No debug logs yet.'
+                                      : _debugLogs,
+                                  style: const TextStyle(
+                                    fontFamily: 'monospace',
+                                    fontSize: 12,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ),
@@ -789,6 +880,16 @@ class ScreenRecorderApi {
         .map((dynamic item) => Map<String, dynamic>.from(item as Map))
         .toList(growable: false);
     return list;
+  }
+
+  Future<String> getDebugLogs() async {
+    final raw = await _methodChannel.invokeMethod<dynamic>('getDebugLogs');
+    return raw?.toString() ?? '';
+  }
+
+  Future<bool> clearDebugLogs() async {
+    final raw = await _methodChannel.invokeMethod<dynamic>('clearDebugLogs');
+    return raw == true;
   }
 
   Future<bool> openRecording(String uri) async {

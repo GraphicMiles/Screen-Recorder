@@ -57,6 +57,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
         super.onCreate(savedInstanceState);
         mediaProjectionManager =
                 (MediaProjectionManager) getSystemService(Context.MEDIA_PROJECTION_SERVICE);
+        RecordingController.debug(this, "MainActivity created");
         handleLaunchIntent(getIntent());
     }
 
@@ -64,6 +65,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        RecordingController.debug(this, "MainActivity received new intent: " + (intent == null ? "null" : intent.getAction()));
         handleLaunchIntent(intent);
     }
 
@@ -71,6 +73,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
     public void onPostResume() {
         super.onPostResume();
         if (autoStartIntentPending) {
+            RecordingController.debug(this, "Auto-start recording flow requested from Quick Settings");
             autoStartIntentPending = false;
             requestScreenCaptureInternal(true, null);
         }
@@ -105,6 +108,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
 
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull MethodChannel.Result result) {
+        RecordingController.debug(this, "MethodChannel call: " + call.method);
         switch (call.method) {
             case "requestScreenCapture":
                 requestScreenCaptureInternal(false, result);
@@ -138,6 +142,13 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
             case "openRecording":
                 openRecording(call, result);
                 break;
+            case "getDebugLogs":
+                result.success(RecordingController.getDebugLogs(this));
+                break;
+            case "clearDebugLogs":
+                RecordingController.clearDebugLogs(this);
+                result.success(true);
+                break;
             default:
                 result.notImplemented();
                 break;
@@ -147,10 +158,12 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
     private void requestScreenCaptureInternal(boolean autoStart, MethodChannel.Result result) {
         pendingScreenCaptureResult = result;
         autoStartAfterCaptureGrant = autoStart;
+        RecordingController.debug(this, "Requesting screen-capture permission. autoStart=" + autoStart);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
+            RecordingController.debug(this, "POST_NOTIFICATIONS not granted; requesting permission");
             continueCaptureAfterNotificationRequest = true;
             ActivityCompat.requestPermissions(
                     this,
@@ -165,13 +178,16 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
 
     private void launchScreenCaptureIntent() {
         if (mediaProjectionManager == null) {
+            RecordingController.debug(this, "MediaProjectionManager unavailable");
             resolveScreenCaptureResult(false, "Screen capture is not available on this device.");
             return;
         }
         try {
+            RecordingController.debug(this, "Launching Android screen-capture intent");
             Intent captureIntent = mediaProjectionManager.createScreenCaptureIntent();
             startActivityForResult(captureIntent, REQUEST_SCREEN_CAPTURE);
         } catch (Exception error) {
+            RecordingController.debugError(this, "Could not open screen-capture prompt", error);
             resolveScreenCaptureResult(false, "Could not open Android's screen-capture prompt.");
         }
     }
@@ -188,6 +204,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
 
     private void startRecording(MethodChannel.Result result) {
         if (pendingCaptureData == null) {
+            RecordingController.debug(this, "startRecording rejected: no pending capture token");
             result.error(
                     "permission_required",
                     "Screen-capture consent is required before each new recording session.",
@@ -196,6 +213,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
             return;
         }
 
+        RecordingController.debug(this, "Starting recording service from activity");
         RecordingController.startService(this, pendingCaptureResultCode, pendingCaptureData);
         pendingCaptureData = null;
         pendingCaptureResultCode = Activity.RESULT_CANCELED;
@@ -213,6 +231,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
             String saveMode = stringValue(arguments.get("saveMode"));
             if (saveMode != null) {
                 StorageManager.setSaveMode(this, saveMode);
+                RecordingController.debug(this, "Save mode set to: " + saveMode);
             }
         }
         result.success(RecordingController.getSettings(this));
@@ -220,6 +239,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
 
     private void chooseSaveLocation(MethodChannel.Result result) {
         pendingSaveLocationResult = result;
+        RecordingController.debug(this, "Opening SAF folder picker");
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
@@ -237,6 +257,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
         }
 
         try {
+            RecordingController.debug(this, "Opening recording URI: " + uriValue);
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(Uri.parse(uriValue), "video/mp4");
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -244,6 +265,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
             startActivity(intent);
             result.success(true);
         } catch (ActivityNotFoundException error) {
+            RecordingController.debugError(this, "No video player available", error);
             result.error("viewer_missing", "No video player is available for MP4 playback.", null);
         }
     }
@@ -257,6 +279,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_POST_NOTIFICATIONS && continueCaptureAfterNotificationRequest) {
             continueCaptureAfterNotificationRequest = false;
+            RecordingController.debug(this, "Notification permission result received");
             launchScreenCaptureIntent();
         }
     }
@@ -266,11 +289,13 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
         super.onActivityResult(requestCode, resultCode, data);
 
         if (requestCode == REQUEST_SCREEN_CAPTURE) {
+            RecordingController.debug(this, "Screen-capture activity result: resultCode=" + resultCode + ", data=" + (data != null));
             if (resultCode == Activity.RESULT_OK && data != null) {
                 pendingCaptureResultCode = resultCode;
                 pendingCaptureData = data;
                 resolveScreenCaptureResult(true, "Screen-capture permission granted.");
                 if (autoStartAfterCaptureGrant) {
+                    RecordingController.debug(this, "Auto-starting recording after permission grant");
                     RecordingController.startService(this, pendingCaptureResultCode, pendingCaptureData);
                     pendingCaptureData = null;
                     pendingCaptureResultCode = Activity.RESULT_CANCELED;
@@ -294,6 +319,7 @@ public class MainActivity extends FlutterActivity implements MethodChannel.Metho
                 }
                 StorageManager.persistTreeUri(this, treeUri);
                 StorageManager.setSaveMode(this, StorageManager.SAVE_MODE_CUSTOM);
+                RecordingController.debug(this, "Custom save folder selected: " + treeUri);
                 pendingSaveLocationResult.success(RecordingController.getSettings(this));
             } else {
                 Map<String, Object> settings = RecordingController.getSettings(this);
