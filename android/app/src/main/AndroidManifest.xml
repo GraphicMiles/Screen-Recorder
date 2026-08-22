@@ -6,8 +6,8 @@
     <application
         android:label="Screen Recorder"
         android:name=".ScreenRecorderApplication"
-        android:icon="@drawable/ic_recorder"
-        android:roundIcon="@drawable/ic_recorder"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="true">
         <activity
             android:name=".MainActivity"

@@ -1,52 +1,39 @@
-# Screen Recorder
+# Screen Recorder — OPTIC
 
-A lightweight Android screen recorder combining the best of two lineages:
+A lightweight Android screen recorder with the **Optic** design system:
+a viewfinder instrument — tick dial with a one-revolution-per-minute sweep,
+camera shutter control, corner metadata, hairline rules on near-black.
 
-- **Flutter / Dart UI** (from the original Screen-Recorder app)
+- **Flutter / Dart UI** (Optic system: flat, hairline, tabular numerals)
 - **Java native recording engine** (MediaProjection + VirtualDisplay + MediaRecorder MP4)
-- Storage hardening and lifecycle fixes merged in from **Cobble**
-
-## Features
-
-- Flutter / Dart UI with status card, settings, saved-recordings list and debug panel
-- Java native recording engine (MediaRecorder-based MP4 output for reliability)
-- MediaProjection capture with per-session Android consent
+- Safe-area insets of at least 3rem (48dp) from top and bottom device edges
 - MediaStore default saving to `Movies/Screen Recorder/`
 - Optional SAF custom folder saving
 - Foreground service (`mediaProjection` type) for background-safe recording
-- Quick Settings tile fallback for reliable global control
-- Notification stop action while recording
-- Local triple-tap to start while the app screen is open
+- Quick Settings tile + notification stop action for reliable global control
+- Persistent debug log (Setup → Debug log)
 
-## Important Android limitation
+## Design rules
 
-A truly invisible system-wide triple-tap detector is not available to ordinary Android apps without overlays or elevated privileges.
+- Flat: no shadows, no gradients, no glass.
+- Hairlines divide; whitespace groups.
+- One dominant tabular numeral per screen.
+- Red = recording only. Amber = caution only.
+- Logo: the monogramic viewfinder — two hands framing a negative-space screen.
 
-So this build uses:
+## Size budget (< 30 MB)
 
-- local triple-tap while the app screen is open
-- Quick Settings tile for reliable global control
-- foreground notification stop action while recording
-
-## Merge notes (Cobble → Screen-Recorder)
-
-- Kept the Flutter/Dart UI + Java engine architecture (the "dart and java" goal).
-- Ported Cobble's storage hardening: exact `RELATIVE_PATH` listing query, trailing-slash
-  default folder, version-guarded `IS_PENDING` MediaStore handling.
-- Fixed a crash present in both lineages: `stopRecording()` used to call
-  `startForeground(FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)` *after* `MediaProjection.stop()`.
-  On Android 14+ stopping the projection revokes the `project_media` app-op, so the
-  `startForeground` call threw `SecurityException` and the finished recording was deleted
-  instead of saved. The service now updates the "Saving" notification via
-  `NotificationManager.notify()` and releases the projection only after the file is saved.
+CI builds with `--split-per-abi --tree-shake-icons`; the `arm64-v8a` APK is the
+install target and stays well under 30 MB. No image assets: the logo, dial and
+icons are vectors / custom paint.
 
 ## Build locally
 
 ```bash
 flutter pub get
-flutter build apk --release --target-platform android-arm,android-arm64 --tree-shake-icons
+flutter build apk --release --split-per-abi --tree-shake-icons
 ```
 
 ## GitHub Actions
 
-The workflow builds a single release APK artifact named `screen-recorder-release-apk`.
+The workflow uploads `optic-release-apks` (one APK per ABI) and prints sizes.

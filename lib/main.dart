@@ -1,906 +1,763 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-void main() {
-  runApp(const ScreenRecorderApp());
+/* ================================================================
+   OPTIC — a viewfinder instrument for screen recording.
+   Flat · hairline · tabular · red = REC only · amber = caution only.
+   Safe insets: >= 48dp (3rem) from top and bottom device edges.
+================================================================ */
+
+class Optic {
+  static const Color bg = Color(0xFF0A0B0C);
+  static const Color ink = Color(0xFFF2F3F1);
+  static const Color mut = Color(0xFF6D7276);
+  static const Color dim = Color(0xFF3F4448);
+  static const Color line = Color(0xFF1D2124);
+  static const Color line2 = Color(0xFF2A2F33);
+  static const Color rec = Color(0xFFFF453A);
+  static const Color amb = Color(0xFFFFB454);
+  static const String mono = 'monospace';
+  static const double safe = 48.0;
 }
 
-class ScreenRecorderApp extends StatelessWidget {
-  const ScreenRecorderApp({super.key});
+TextStyle micro(Color c, {double ls = 2.4, double fs = 9}) =>
+    TextStyle(fontFamily: Optic.mono, fontSize: fs, letterSpacing: ls, color: c);
+
+String two(int n) => n.toString().padStart(2, '0');
+
+String fmtMs(int ms) {
+  final s = ms ~/ 1000;
+  final d = (ms % 1000) ~/ 100;
+  return '${two(s ~/ 60)}:${two(s % 60)}.$d';
+}
+
+/* ---------------- logo: the monogramic viewfinder ---------------- */
+
+class LogoPainter extends CustomPainter {
+  final Color color;
+  const LogoPainter(this.color);
+
+  static Path hand() {
+    final p = Path();
+    p.moveTo(132, 200);
+    p.cubicTo(118, 200, 110, 191, 114, 181);
+    p.cubicTo(118, 170, 132, 163, 150, 161);
+    p.cubicTo(200, 154, 252, 150, 294, 148);
+    p.cubicTo(302, 118, 322, 96, 354, 92);
+    p.cubicTo(394, 87, 422, 112, 426, 148);
+    p.cubicTo(429, 186, 414, 210, 401, 232);
+    p.cubicTo(392, 248, 388, 268, 388, 292);
+    p.cubicTo(388, 305, 381, 312, 372, 312);
+    p.lineTo(372, 200);
+    p.lineTo(140, 200);
+    p.cubicTo(137, 200, 134, 200, 132, 200);
+    p.close();
+    return p;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.width / 512;
+    canvas.scale(s);
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final h = hand();
+    canvas.drawPath(h, paint);
+    canvas.save();
+    canvas.translate(512, 512);
+    canvas.rotate(math.pi);
+    canvas.drawPath(h, paint);
+    canvas.restore();
+    final donut = Path()..fillType = PathFillType.evenOdd;
+    donut.addOval(Rect.fromCircle(center: const Offset(236, 256), radius: 34));
+    donut.addOval(Rect.fromCircle(center: const Offset(236, 256), radius: 15));
+    canvas.drawPath(donut, paint);
+    canvas.drawOval(
+        Rect.fromCircle(center: const Offset(330, 226), radius: 11), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/* ---------------- dial: ticks + sweep ---------------- */
+
+class DialPainter extends CustomPainter {
+  final double fraction; // 0..1, one revolution per minute
+  final bool armed;
+  const DialPainter({required this.fraction, required this.armed});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final sc = size.width / 224;
+    canvas.scale(sc);
+    final c = const Offset(112, 112);
+
+    final tick = Paint()..style = PaintingStyle.stroke..strokeWidth = 1;
+    for (var i = 0; i < 60; i++) {
+      final a = i * 6 * math.pi / 180;
+      final major = i % 5 == 0;
+      final r1 = major ? 99.0 : 103.0;
+      final r2 = 108.0;
+      tick.color = major ? Optic.mut : Optic.dim;
+      canvas.drawLine(
+        Offset(c.dx + r1 * math.sin(a), c.dy - r1 * math.cos(a)),
+        Offset(c.dx + r2 * math.sin(a), c.dy - r2 * math.cos(a)),
+        tick,
+      );
+    }
+
+    final hair = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Optic.line;
+    canvas.drawCircle(c, 88, hair);
+
+    if (armed || fraction > 0) {
+      final sweep = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round
+        ..color = Optic.ink;
+      final f = fraction <= 0 ? 0.0001 : fraction;
+      canvas.drawArc(
+        Rect.fromCircle(center: c, radius: 97),
+        -math.pi / 2,
+        2 * math.pi * f,
+        false,
+        sweep,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant DialPainter old) =>
+      old.fraction != fraction || old.armed != armed;
+}
+
+/* ---------------- channels ---------------- */
+
+const method = MethodChannel('com.graphicmiles.screenrecorder/recorder');
+const eventChannel = EventChannel('com.graphicmiles.screenrecorder/events');
+
+/* ---------------- app ---------------- */
+
+void main() {
+  runApp(const OpticApp());
+}
+
+class OpticApp extends StatelessWidget {
+  const OpticApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final base = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF2F6BFF),
-      brightness: Brightness.dark,
-    );
-
     return MaterialApp(
-      title: 'Screen Recorder',
       debugShowCheckedModeBanner: false,
+      title: 'Screen Recorder',
       theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: base,
-        scaffoldBackgroundColor: const Color(0xFF0E1116),
-        cardTheme: CardThemeData(
-          color: const Color(0xFF171B22),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: Optic.bg,
+        colorScheme: const ColorScheme.dark(
+          surface: Optic.bg,
+          onSurface: Optic.ink,
+          primary: Optic.ink,
         ),
+        useMaterial3: true,
       ),
-      home: const HomePage(),
+      home: const HomeScreen(),
     );
   }
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
-  final ScreenRecorderApi _api = const ScreenRecorderApi();
-
-  StreamSubscription<Map<String, dynamic>>? _eventSubscription;
-  Map<String, dynamic> _status = const <String, dynamic>{};
-  Map<String, dynamic> _settings = const <String, dynamic>{};
-  List<Map<String, dynamic>> _recordings = const <Map<String, dynamic>>[];
-  String _debugLogs = '';
-  bool _busy = true;
-  String? _lastNotice;
-  int _tapCount = 0;
-  DateTime? _firstTapAt;
+class _HomeScreenState extends State<HomeScreen> {
+  int tab = 0;
+  Map<String, dynamic> status = <String, dynamic>{};
+  Map<String, dynamic> settings = <String, dynamic>{};
+  List<Map<String, dynamic>> clips = <Map<String, dynamic>>[];
+  DateTime? recStart;
+  Timer? clock;
+  String? flash;
+  Timer? flashTimer;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _eventSubscription = _api.events.listen(_handleNativeEvent);
-    unawaited(_refreshAll());
+    eventChannel.receiveBroadcastStream().listen(_onEvent);
+    clock = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (recStart != null && mounted) setState(() {});
+    });
+    refresh();
   }
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _eventSubscription?.cancel();
+    clock?.cancel();
+    flashTimer?.cancel();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(_refreshAll(showLoader: false));
-    }
-  }
-
-  Future<void> _refreshAll({bool showLoader = true}) async {
-    if (showLoader) {
-      setState(() => _busy = true);
-    }
+  Future<void> refresh() async {
     try {
-      final results = await Future.wait<dynamic>([
-        _api.getRecordingStatus(),
-        _api.getSettings(),
-        _api.getSavedRecordings(),
-        _api.getDebugLogs(),
-      ]);
-      if (!mounted) {
-        return;
-      }
+      final s = await method.invokeMapMethod<String, dynamic>('getRecordingStatus');
+      final st = await method.invokeMapMethod<String, dynamic>('getSettings');
+      final cl = await method.invokeListMethod<Map<dynamic, dynamic>>('getSavedRecordings');
+      if (!mounted) return;
       setState(() {
-        _status = results[0] as Map<String, dynamic>;
-        _settings = results[1] as Map<String, dynamic>;
-        _recordings = results[2] as List<Map<String, dynamic>>;
-        _debugLogs = results[3] as String? ?? '';
-        _busy = false;
+        status = Map<String, dynamic>.from(s ?? {});
+        settings = Map<String, dynamic>.from(st ?? {});
+        clips = (cl ?? [])
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList();
       });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _busy = false);
-      _showSnack('Could not refresh status: $error');
-    }
+    } catch (_) {}
   }
 
-  void _handleNativeEvent(Map<String, dynamic> event) {
-    final type = event['type']?.toString() ?? 'event';
-    final message = event['message']?.toString();
+  void _onEvent(dynamic raw) {
+    final e = Map<String, dynamic>.from(raw as Map);
+    final type = e['type'];
+    if (type == 'recordingStarted') {
+      recStart = DateTime.now();
+    } else if (type == 'recordingSaved') {
+      recStart = null;
+      _flash('SAVED');
+      refresh();
+      return;
+    } else if (type == 'recordingError') {
+      recStart = null;
+      _flash((e['message'] ?? 'ERROR').toString().toUpperCase());
+    } else if (type == 'recordingStopped' && recStart == null) {
+      // stopping/saving phases keep the clock until saved/error
+    }
+    refresh();
+  }
 
-    if (type == 'debugLog') {
-      final line = event['line']?.toString();
-      if (line != null && line.isNotEmpty && mounted) {
-        setState(() {
-          _debugLogs = _debugLogs.isEmpty ? line : '$_debugLogs\n$line';
-        });
-      }
+  void _flash(String text) {
+    setState(() => flash = text);
+    flashTimer?.cancel();
+    flashTimer = Timer(const Duration(milliseconds: 1400), () {
+      if (mounted) setState(() => flash = null);
+    });
+  }
+
+  bool get active =>
+      ['STARTING', 'RECORDING', 'STOPPING', 'SAVING'].contains(status['state']);
+
+  int get elapsedMs =>
+      recStart == null ? 0 : DateTime.now().difference(recStart!).inMilliseconds;
+
+  Future<void> onShutter() async {
+    if (active) {
+      await method.invokeMethod('stopRecording');
       return;
     }
-
-    if (message != null && message.isNotEmpty) {
-      _lastNotice = message;
-      _showSnack(message);
-    }
-    if (type == 'recordingSaved' ||
-        type == 'recordingStopped' ||
-        type == 'recordingStarted' ||
-        type == 'recordingError' ||
-        type == 'recordingStateChanged') {
-      unawaited(_refreshAll(showLoader: false));
-    }
-  }
-
-  Future<void> _toggleRecording() async {
-    final state = _status['state']?.toString() ?? 'IDLE';
-    final isRecording = state == 'RECORDING' ||
-        state == 'STARTING' ||
-        state == 'STOPPING' ||
-        state == 'SAVING';
-
-    if (isRecording) {
-      await _stopRecording();
-    } else {
-      await _startRecording();
-    }
-  }
-
-  Future<void> _startRecording() async {
-    if (_busy) {
-      return;
-    }
-    setState(() => _busy = true);
     try {
-      final permission = await _api.requestScreenCapture();
-      final granted = permission['granted'] == true;
-      if (!granted) {
-        setState(() => _busy = false);
-        _showSnack(permission['message']?.toString() ?? 'Screen capture was denied.');
-        await _refreshAll(showLoader: false);
-        return;
+      final r = await method.invokeMapMethod<String, dynamic>('requestScreenCapture');
+      if (r?['granted'] == true) {
+        await method.invokeMethod('startRecording');
+      } else {
+        _flash('CONSENT REQUIRED');
       }
-      await _api.startRecording();
-      _showSnack('Recording started.');
-      await _refreshAll(showLoader: false);
-    } catch (error) {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
-      _showSnack('Could not start recording: $error');
-    }
-  }
-
-  Future<void> _stopRecording() async {
-    if (_busy) {
-      return;
-    }
-    setState(() => _busy = true);
-    try {
-      await _api.stopRecording();
-      await _refreshAll(showLoader: false);
-    } catch (error) {
-      if (mounted) {
-        setState(() => _busy = false);
-      }
-      _showSnack('Could not stop recording: $error');
-    }
-  }
-
-  void _handleLocalTripleTap() {
-    final now = DateTime.now();
-    if (_firstTapAt == null || now.difference(_firstTapAt!).inMilliseconds > 700) {
-      _firstTapAt = now;
-      _tapCount = 1;
-      return;
-    }
-    _tapCount += 1;
-    if (_tapCount >= 3) {
-      _tapCount = 0;
-      _firstTapAt = null;
-      unawaited(_toggleRecording());
-    }
-  }
-
-  void _showSnack(String message) {
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  Future<void> _openSettings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => SettingsPage(api: _api, initialSettings: _settings),
-      ),
-    );
-    await _refreshAll(showLoader: false);
-  }
-
-  Future<void> _openRecording(String uri) async {
-    try {
-      await _api.openRecording(uri);
-    } catch (error) {
-      _showSnack('Could not open recording: $error');
-    }
-  }
-
-  Future<void> _copyDebugLogs() async {
-    await Clipboard.setData(ClipboardData(text: _debugLogs));
-    _showSnack('Debug logs copied.');
-  }
-
-  Future<void> _clearDebugLogs() async {
-    try {
-      await _api.clearDebugLogs();
-      await _refreshAll(showLoader: false);
-      _showSnack('Debug logs cleared.');
-    } catch (error) {
-      _showSnack('Could not clear logs: $error');
+    } catch (_) {
+      _flash('CONSENT REQUIRED');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final statusLabel = _status['stateLabel']?.toString() ?? 'Ready';
-    final state = _status['state']?.toString() ?? 'IDLE';
-    final isRecording = state == 'RECORDING' || state == 'STARTING';
-    final lastError = _status['lastError']?.toString();
-    final supportNote = _status['globalTapSupportMessage']?.toString() ??
-        'Android does not allow invisible global triple-tap capture.';
+    final mq = MediaQuery.of(context);
+    final top = math.max(mq.padding.top, Optic.safe);
+    final bottom = math.max(mq.padding.bottom, Optic.safe);
 
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: _handleLocalTripleTap,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Screen Recorder'),
-          centerTitle: false,
-          actions: [
-            IconButton(
-              tooltip: 'Settings',
-              onPressed: _openSettings,
-              icon: const Icon(Icons.settings_rounded),
-            ),
-          ],
-        ),
-        body: _busy && _status.isEmpty
-            ? const Center(child: CircularProgressIndicator())
-            : RefreshIndicator(
-                onRefresh: _refreshAll,
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                  children: [
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                _StatusDot(active: isRecording),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    statusLabel,
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .headlineSmall,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              isRecording
-                                  ? 'Local triple-tap or use the Quick Settings tile / notification to stop.'
-                                  : 'Local triple-tap to start while this screen is open.',
-                              style: Theme.of(context).textTheme.bodyLarge,
-                            ),
-                            const SizedBox(height: 16),
-                            Wrap(
-                              spacing: 12,
-                              runSpacing: 12,
-                              children: [
-                                FilledButton.icon(
-                                  onPressed: _busy
-                                      ? null
-                                      : () => unawaited(_toggleRecording()),
-                                  icon: Icon(isRecording
-                                      ? Icons.stop_circle_outlined
-                                      : Icons.fiber_manual_record),
-                                  label: Text(isRecording
-                                      ? 'Stop recording'
-                                      : 'Start recording'),
-                                ),
-                                OutlinedButton.icon(
-                                  onPressed: _busy
-                                      ? null
-                                      : () => unawaited(_refreshAll(showLoader: false)),
-                                  icon: const Icon(Icons.refresh_rounded),
-                                  label: const Text('Refresh'),
-                                ),
-                              ],
-                            ),
-                            if (lastError != null && lastError.isNotEmpty) ...[
-                              const SizedBox(height: 16),
-                              Text(
-                                lastError,
-                                style: TextStyle(
-                                  color: Theme.of(context).colorScheme.error,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.info_outline_rounded),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    'Global control reality',
-                                    style: Theme.of(context).textTheme.titleLarge,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            Text(supportNote),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'Closest reliable global fallback: add Screen Recorder to Quick Settings. The recording engine remains independent from gesture detection for future upgrades.',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Current settings',
-                              style: Theme.of(context).textTheme.titleLarge,
-                            ),
-                            const SizedBox(height: 12),
-                            _InfoRow(
-                              label: 'Video quality',
-                              value: _settings['quality']?.toString() ?? 'automatic',
-                            ),
-                            _InfoRow(
-                              label: 'Save location',
-                              value: _settings['saveModeLabel']?.toString() ?? 'Device / Gallery',
-                            ),
-                            _InfoRow(
-                              label: 'Custom folder',
-                              value: _settings['customLocationDescription']?.toString() ?? 'Not selected',
-                            ),
-                            _InfoRow(
-                              label: 'Audio',
-                              value: _settings['audioModeLabel']?.toString() ?? 'No audio',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Card(
-                      child: Padding(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    'Debug panel',
-                                    style: Theme.of(context).textTheme.titleLarge,
-                                  ),
-                                ),
-                                TextButton.icon(
-                                  onPressed: _debugLogs.trim().isEmpty
-                                      ? null
-                                      : () => unawaited(_copyDebugLogs()),
-                                  icon: const Icon(Icons.copy_all_rounded),
-                                  label: const Text('Copy'),
-                                ),
-                                TextButton.icon(
-                                  onPressed: _debugLogs.trim().isEmpty
-                                      ? null
-                                      : () => unawaited(_clearDebugLogs()),
-                                  icon: const Icon(Icons.delete_outline_rounded),
-                                  label: const Text('Clear'),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 8),
-                            const Text(
-                              'If the app crashes, reopen it and copy the logs below.',
-                            ),
-                            const SizedBox(height: 12),
-                            Container(
-                              width: double.infinity,
-                              constraints: const BoxConstraints(minHeight: 120, maxHeight: 240),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF0E1116),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(color: const Color(0xFF2A2F38)),
-                              ),
-                              child: SingleChildScrollView(
-                                child: SelectableText(
-                                  _debugLogs.trim().isEmpty
-                                      ? 'No debug logs yet.'
-                                      : _debugLogs,
-                                  style: const TextStyle(
-                                    fontFamily: 'monospace',
-                                    fontSize: 12,
-                                    height: 1.35,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Recent recordings',
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                        ),
-                        if (_lastNotice != null)
-                          Flexible(
-                            child: Text(
-                              _lastNotice!,
-                              textAlign: TextAlign.end,
-                              style: Theme.of(context).textTheme.bodySmall,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    if (_recordings.isEmpty)
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.all(20),
-                          child: Text(
-                            'No recordings yet. Start a recording, use the phone normally, then stop it to save an MP4.',
-                            style: Theme.of(context).textTheme.bodyLarge,
-                          ),
-                        ),
-                      )
-                    else
-                      ..._recordings.map(
-                        (recording) => Card(
-                          margin: const EdgeInsets.only(bottom: 12),
-                          child: ListTile(
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 8,
-                            ),
-                            onTap: () => _openRecording(
-                              recording['uri']?.toString() ?? '',
-                            ),
-                            leading: const Icon(Icons.movie_creation_outlined),
-                            title: Text(
-                              recording['displayName']?.toString() ?? 'Recording',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              '${recording['locationLabel'] ?? 'Saved'} • ${_formatTimestamp(recording['savedAtMs'])} • ${_formatBytes(recording['sizeBytes'])}',
-                            ),
-                            trailing: const Icon(Icons.open_in_new_rounded),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+    return Scaffold(
+      backgroundColor: Optic.bg,
+      body: Stack(
+        children: [
+          Column(
+            children: [
+              SizedBox(height: top),
+              _topBar(),
+              Expanded(
+                child: [ _view(), _clips(), _setup() ][tab],
               ),
+              _nav(),
+              SizedBox(height: bottom),
+            ],
+          ),
+          if (flash != null)
+            Positioned(
+              top: top + 62,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(flash!, micro(Optic.amb, ls: 3)),
+              ),
+            ),
+        ],
       ),
     );
   }
 
-  String _formatTimestamp(dynamic raw) {
-    if (raw is! num) {
-      return 'Unknown time';
-    }
-    final date = DateTime.fromMillisecondsSinceEpoch(raw.toInt());
-    String two(int value) => value.toString().padLeft(2, '0');
-    return '${date.year}-${two(date.month)}-${two(date.day)} ${two(date.hour)}:${two(date.minute)}';
+  Widget _topBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 12, 22, 4),
+      child: Row(
+        children: [
+          CustomPaint(size: const Size(17, 17), painter: const LogoPainter(Optic.ink)),
+          const SizedBox(width: 9),
+          Text('OPTIC SR', micro(Optic.mut, ls: 3)),
+          const Spacer(),
+          Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: active ? Optic.rec : const Color(0xFF30D158),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
-  String _formatBytes(dynamic raw) {
-    if (raw is! num || raw <= 0) {
-      return 'size unknown';
-    }
-    const units = ['B', 'KB', 'MB', 'GB'];
-    double value = raw.toDouble();
-    int index = 0;
-    while (value >= 1024 && index < units.length - 1) {
-      value /= 1024;
-      index += 1;
-    }
-    return '${value.toStringAsFixed(value >= 100 || index == 0 ? 0 : 1)} ${units[index]}';
+  /* ---------------- VIEW ---------------- */
+
+  Widget _view() {
+    final bit = {'standard': '6.0', 'automatic': '8.9', 'high': '12.0'}[
+            settings['quality'] ?? 'automatic'] ??
+        '8.9';
+    final save = (settings['saveMode'] ?? 'gallery').toString().toUpperCase();
+    final frac = active ? (elapsedMs / 1000 % 60) / 60 : 0.0;
+    final stateLabel = active
+        ? (status['state'] == 'RECORDING' ? 'REC' : (status['stateLabel'] ?? '').toString().toUpperCase())
+        : 'READY';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 6, 22, 10),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text.rich(TextSpan(children: [
+                TextSpan(text: '60', style: micro(Optic.ink)),
+                TextSpan(text: ' FPS', style: micro(Optic.mut)),
+              ])),
+              Text.rich(TextSpan(children: [
+                TextSpan(text: bit, style: micro(Optic.ink)),
+                TextSpan(text: ' M', style: micro(Optic.mut)),
+              ])),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: 224,
+            height: 224,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CustomPaint(
+                  size: const Size(224, 224),
+                  painter: DialPainter(fraction: frac, armed: active),
+                ),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      active ? fmtMs(elapsedMs) : '00:00.0',
+                      style: const TextStyle(
+                        fontFamily: Optic.mono,
+                        fontSize: 30,
+                        letterSpacing: 0.6,
+                        color: Optic.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      stateLabel,
+                      micro(active && status['state'] == 'RECORDING'
+                          ? Optic.rec
+                          : Optic.mut, ls: 3.4),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('H.264 · MP4', micro(Optic.dim, ls: 1.6)),
+              Text(save == 'CUSTOM' ? 'CUSTOM' : 'GALLERY', micro(Optic.dim, ls: 1.6)),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _cbtn(
+                onTap: () => setState(() => tab = 1),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    Icon(Icons.video_library_outlined, size: 15, color: Optic.mut),
+                    Positioned(
+                      top: -6,
+                      right: -8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Optic.bg,
+                          border: Border.all(color: Optic.line2),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text('${clips.length}', micro(Optic.mut, fs: 7.5, ls: 1)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                onTap: onShutter,
+                child: Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Optic.ink, width: 2),
+                  ),
+                  alignment: Alignment.center,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: active ? 26 : 50,
+                    height: active ? 26 : 50,
+                    decoration: BoxDecoration(
+                      color: Optic.ink,
+                      borderRadius: BorderRadius.circular(active ? 10 : 25),
+                    ),
+                  ),
+                ),
+              ),
+              _cbtn(
+                onTap: () => setState(() => tab = 2),
+                child: Icon(Icons.tune_outlined, size: 15, color: Optic.mut),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Text(
+            active ? 'TAP TO STOP & SAVE' : 'TAP SHUTTER TO RECORD',
+            micro(Optic.dim, ls: 3),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _cbtn({required VoidCallback onTap, required Widget child}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Optic.line2),
+        ),
+        alignment: Alignment.center,
+        child: child,
+      ),
+    );
+  }
+
+  /* ---------------- CLIPS ---------------- */
+
+  Widget _clips() {
+    final totalMb = clips.fold<double>(
+        0, (a, c) => a + ((c['sizeBytes'] as int? ?? 0) / 1e6));
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 10, 22, 10),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('CLIPS', micro(Optic.ink, ls: 3, fs: 11)),
+              Text('${clips.length} · ${totalMb.toStringAsFixed(1)} MB',
+                  micro(Optic.mut, ls: 1.6)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: clips.isEmpty
+                ? Center(child: Text('NO CLIPS YET', micro(Optic.dim, ls: 2)))
+                : ListView.builder(
+                    itemCount: clips.length,
+                    itemBuilder: (_, i) {
+                      final c = clips[i];
+                      final mb = ((c['sizeBytes'] as int? ?? 0) / 1e6);
+                      return GestureDetector(
+                        onTap: () => method.invokeMethod(
+                            'openRecording', {'uri': c['uri']}),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 13),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              top: const BorderSide(color: Optic.line),
+                              bottom: i == clips.length - 1
+                                  ? const BorderSide(color: Optic.line)
+                                  : BorderSide.none,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Text(two(i + 1), micro(Optic.dim)),
+                              const SizedBox(width: 12),
+                              Container(
+                                width: 74,
+                                height: 44,
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: Optic.line2),
+                                  borderRadius: BorderRadius.circular(6),
+                                ),
+                                alignment: Alignment.center,
+                                child: CustomPaint(
+                                    size: const Size(24, 24),
+                                    painter: const LogoPainter(Optic.dim)),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      (c['displayName'] ?? 'CLIP').toString(),
+                                      style: const TextStyle(
+                                          fontFamily: Optic.mono,
+                                          fontSize: 9.5,
+                                          color: Optic.ink),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${mb.toStringAsFixed(1)} MB · ${c['locationLabel'] ?? ''}',
+                                      micro(Optic.mut, ls: 1),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                width: 26,
+                                height: 26,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Optic.line2),
+                                ),
+                                alignment: Alignment.center,
+                                child: const Icon(Icons.play_arrow,
+                                    size: 10, color: Optic.ink),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /* ---------------- SETUP ---------------- */
+
+  Widget _setup() {
+    final q = (settings['quality'] ?? 'automatic').toString();
+    final saveMode = (settings['saveMode'] ?? 'gallery').toString();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 10, 22, 10),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('SETUP', micro(Optic.ink, ls: 3, fs: 11)),
+              Text('SR-03 · V0.4', micro(Optic.mut, ls: 1.6)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          _srow('QUALITY', _seg(
+            [['STD', 'standard'], ['AUTO', 'automatic'], ['HIGH', 'high']],
+            q,
+            (v) async {
+              await method.invokeMethod('saveSettings', {'quality': v});
+              refresh();
+            },
+          )),
+          _srow('SAVE TO', _seg(
+            [['GALLERY', 'gallery'], ['CUSTOM', 'custom']],
+            saveMode,
+            (v) async {
+              if (v == 'custom') {
+                await method.invokeMethod('chooseSaveLocation');
+              } else {
+                await method.invokeMethod('saveSettings', {'saveMode': 'gallery'});
+              }
+              refresh();
+            },
+          )),
+          _srow('QS TILE', Text('ADD IN QUICK SETTINGS', micro(Optic.mut, ls: 1.6))),
+          _srow('DEBUG LOG', GestureDetector(
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const LogsPage())),
+            child: Text('VIEW', micro(Optic.ink, ls: 2)),
+          )),
+          _srow('AUDIO', Text('NOT CAPTURED', micro(Optic.dim, ls: 1.6))),
+        ],
+      ),
+    );
+  }
+
+  Widget _srow(String label, Widget right) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 13),
+      decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Optic.line))),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [Text(label, micro(Optic.mut, ls: 2.2)), right],
+      ),
+    );
+  }
+
+  Widget _seg(List<List<String>> opts, String current,
+      Future<void> Function(String) onPick) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: Optic.line2),
+        borderRadius: BorderRadius.circular(7),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(opts.length, (i) {
+          final on = opts[i][1] == current;
+          return GestureDetector(
+            onTap: () => onPick(opts[i][1]),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: on ? Optic.ink : Colors.transparent,
+                border: i > 0
+                    ? const Border(left: BorderSide(color: Optic.line2))
+                    : null,
+              ),
+              child: Text(opts[i][0],
+                  micro(on ? Optic.bg : Optic.mut, ls: 1.4, fs: 8)),
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  /* ---------------- nav ---------------- */
+
+  Widget _nav() {
+    final labels = ['VIEW', 'CLIPS', 'SETUP'];
+    return Container(
+      decoration: const BoxDecoration(
+          border: Border(top: BorderSide(color: Optic.line))),
+      padding: const EdgeInsets.fromLTRB(26, 8, 26, 4),
+      child: Row(
+        children: List.generate(labels.length, (i) {
+          final on = tab == i;
+          return Expanded(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() => tab = i);
+                refresh();
+              },
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                      width: 14,
+                      height: 2,
+                      color: on ? Optic.ink : Colors.transparent),
+                  const SizedBox(height: 6),
+                  Text(labels[i], micro(on ? Optic.ink : Optic.dim, ls: 2.8)),
+                  const SizedBox(height: 6),
+                ],
+              ),
+            ),
+          );
+        }),
+      ),
+    );
   }
 }
 
-class SettingsPage extends StatefulWidget {
-  const SettingsPage({
-    super.key,
-    required this.api,
-    required this.initialSettings,
-  });
+/* ---------------- logs ---------------- */
 
-  final ScreenRecorderApi api;
-  final Map<String, dynamic> initialSettings;
-
-  @override
-  State<SettingsPage> createState() => _SettingsPageState();
-}
-
-class _SettingsPageState extends State<SettingsPage> {
-  late String _quality;
-  late String _saveMode;
-  late String _customLocationDescription;
-  bool _loading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _quality = widget.initialSettings['quality']?.toString() ?? 'automatic';
-    _saveMode = widget.initialSettings['saveMode']?.toString() ?? 'gallery';
-    _customLocationDescription =
-        widget.initialSettings['customLocationDescription']?.toString() ??
-            'Not selected';
-  }
-
-  Future<void> _saveSettings() async {
-    setState(() => _loading = true);
-    try {
-      final updated = await widget.api.saveSettings(
-        quality: _quality,
-        saveMode: _saveMode,
-      );
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _quality = updated['quality']?.toString() ?? _quality;
-        _saveMode = updated['saveMode']?.toString() ?? _saveMode;
-        _customLocationDescription =
-            updated['customLocationDescription']?.toString() ??
-                _customLocationDescription;
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _loading = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('Could not save settings: $error')));
-    }
-  }
-
-  Future<void> _chooseLocation() async {
-    setState(() => _loading = true);
-    try {
-      final updated = await widget.api.chooseSaveLocation();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _saveMode = updated['saveMode']?.toString() ?? 'custom';
-        _customLocationDescription =
-            updated['customLocationDescription']?.toString() ??
-                _customLocationDescription;
-        _loading = false;
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() => _loading = false);
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('Could not choose folder: $error')));
-    }
-  }
+class LogsPage extends StatelessWidget {
+  const LogsPage({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Video quality',
-                    style: Theme.of(context).textTheme.titleLarge,
+      backgroundColor: Optic.bg,
+      body: SafeArea(
+        child: FutureBuilder<dynamic>(
+          future: method.invokeMethod<String>('getDebugLogs'),
+          builder: (_, snap) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 16, 22, 8),
+                  child: GestureDetector(
+                    onTap: () => Navigator.of(context).pop(),
+                    child: Text('‹ BACK', micro(Optic.mut, ls: 2.4)),
                   ),
-                  const SizedBox(height: 12),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment<String>(
-                        value: 'automatic',
-                        label: Text('Automatic'),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(22, 8, 22, 12),
+                  child: Text('DEBUG LOG', micro(Optic.ink, ls: 3, fs: 11)),
+                ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.fromLTRB(22, 0, 22, 24),
+                    child: Text(
+                      (snap.data?.toString() ?? '').isEmpty
+                          ? 'EMPTY'
+                          : snap.data.toString(),
+                      style: const TextStyle(
+                        fontFamily: Optic.mono,
+                        fontSize: 9.5,
+                        height: 1.8,
+                        color: Optic.mut,
                       ),
-                      ButtonSegment<String>(
-                        value: 'high',
-                        label: Text('High'),
-                      ),
-                      ButtonSegment<String>(
-                        value: 'standard',
-                        label: Text('Standard'),
-                      ),
-                    ],
-                    selected: <String>{_quality},
-                    onSelectionChanged: _loading
-                        ? null
-                        : (selection) {
-                            final value = selection.first;
-                            setState(() => _quality = value);
-                            unawaited(_saveSettings());
-                          },
-                    multiSelectionEnabled: false,
-                    showSelectedIcon: false,
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Automatic selects a bitrate from the current display size and refresh rate. High uses more bitrate. Standard keeps files smaller without forcing an unusually soft picture.',
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Save location',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 8),
-                  SegmentedButton<String>(
-                    segments: const [
-                      ButtonSegment<String>(
-                        value: 'gallery',
-                        icon: Icon(Icons.photo_library_outlined),
-                        label: Text('Device / Gallery'),
-                      ),
-                      ButtonSegment<String>(
-                        value: 'custom',
-                        icon: Icon(Icons.folder_open_rounded),
-                        label: Text('Custom location'),
-                      ),
-                    ],
-                    selected: <String>{_saveMode},
-                    onSelectionChanged: _loading
-                        ? null
-                        : (selection) async {
-                            final value = selection.first;
-                            setState(() => _saveMode = value);
-                            await _saveSettings();
-                            if (value == 'custom' &&
-                                _customLocationDescription == 'Not selected') {
-                              await _chooseLocation();
-                            }
-                          },
-                    multiSelectionEnabled: false,
-                    showSelectedIcon: false,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Device / Gallery saves with MediaStore to Movies/Screen Recorder so the video appears in normal media apps.',
-                  ),
-                  const SizedBox(height: 8),
-                  Text('Custom folder: $_customLocationDescription'),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _loading ? null : _chooseLocation,
-                    icon: const Icon(Icons.folder_open_rounded),
-                    label: const Text('Choose custom folder'),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Audio',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'This first build records screen video only. Audio is intentionally off to keep the native pipeline small, understandable, and reliable.',
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+                ),
+              ],
+            );
+          },
+        ),
       ),
     );
-  }
-}
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.active});
-
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 14,
-      height: 14,
-      decoration: BoxDecoration(
-        color: active ? const Color(0xFFFF4D4F) : const Color(0xFF4CAF50),
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: (active ? const Color(0xFFFF4D4F) : const Color(0xFF4CAF50))
-                .withValues(alpha: 0.35),
-            blurRadius: 14,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.bodyLarge,
-            ),
-          ),
-          const SizedBox(width: 12),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.end,
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class ScreenRecorderApi {
-  const ScreenRecorderApi();
-
-  static const MethodChannel _methodChannel =
-      MethodChannel('com.graphicmiles.screenrecorder/recorder');
-  static const EventChannel _eventChannel =
-      EventChannel('com.graphicmiles.screenrecorder/events');
-
-  Stream<Map<String, dynamic>> get events => _eventChannel
-      .receiveBroadcastStream()
-      .map((dynamic event) => Map<String, dynamic>.from(event as Map));
-
-  Future<Map<String, dynamic>> requestScreenCapture() =>
-      _invokeMap('requestScreenCapture');
-
-  Future<bool> startRecording() async {
-    final result = await _methodChannel.invokeMethod<dynamic>('startRecording');
-    return result == true;
-  }
-
-  Future<bool> stopRecording() async {
-    final result = await _methodChannel.invokeMethod<dynamic>('stopRecording');
-    return result == true;
-  }
-
-  Future<Map<String, dynamic>> getRecordingStatus() =>
-      _invokeMap('getRecordingStatus');
-
-  Future<Map<String, dynamic>> getSettings() => _invokeMap('getSettings');
-
-  Future<Map<String, dynamic>> saveSettings({
-    required String quality,
-    required String saveMode,
-  }) =>
-      _invokeMap('saveSettings', <String, dynamic>{
-        'quality': quality,
-        'saveMode': saveMode,
-      });
-
-  Future<Map<String, dynamic>> chooseSaveLocation() =>
-      _invokeMap('chooseSaveLocation');
-
-  Future<List<Map<String, dynamic>>> getSavedRecordings() async {
-    final raw = await _methodChannel.invokeMethod<dynamic>('getSavedRecordings');
-    final list = (raw as List<dynamic>? ?? const <dynamic>[])
-        .map((dynamic item) => Map<String, dynamic>.from(item as Map))
-        .toList(growable: false);
-    return list;
-  }
-
-  Future<String> getDebugLogs() async {
-    final raw = await _methodChannel.invokeMethod<dynamic>('getDebugLogs');
-    return raw?.toString() ?? '';
-  }
-
-  Future<bool> clearDebugLogs() async {
-    final raw = await _methodChannel.invokeMethod<dynamic>('clearDebugLogs');
-    return raw == true;
-  }
-
-  Future<bool> openRecording(String uri) async {
-    final result = await _methodChannel
-        .invokeMethod<dynamic>('openRecording', <String, dynamic>{'uri': uri});
-    return result == true;
-  }
-
-  Future<Map<String, dynamic>> _invokeMap(String method,
-      [Map<String, dynamic>? arguments]) async {
-    final raw = await _methodChannel.invokeMethod<dynamic>(method, arguments);
-    return Map<String, dynamic>.from(raw as Map);
   }
 }

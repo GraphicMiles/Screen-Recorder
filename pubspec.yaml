@@ -1,7 +1,7 @@
 name: screen_recorder
 description: Lightweight Android screen recorder with a Flutter UI and native Java capture pipeline.
 publish_to: 'none'
-version: 0.3.0+3
+version: 0.4.0+4
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
