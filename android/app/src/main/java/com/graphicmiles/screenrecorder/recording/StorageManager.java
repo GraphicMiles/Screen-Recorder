@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
 
@@ -33,7 +34,8 @@ public class StorageManager {
     private static final String PREFS_NAME = RecordingController.PREFS_NAME;
     private static final String KEY_SAVE_MODE = "save_mode";
     private static final String KEY_TREE_URI = "tree_uri";
-    private static final String DEFAULT_FOLDER = Environment.DIRECTORY_MOVIES + "/Screen Recorder";
+    // Trailing slash keeps RELATIVE_PATH matching exact (no "Screen Recorder 2" style siblings).
+    private static final String DEFAULT_FOLDER = Environment.DIRECTORY_MOVIES + "/Screen Recorder/";
 
     private final Context context;
 
@@ -149,7 +151,9 @@ public class StorageManager {
         values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
         values.put(MediaStore.Video.Media.RELATIVE_PATH, DEFAULT_FOLDER);
         values.put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis());
-        values.put(MediaStore.Video.Media.IS_PENDING, 1);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Video.Media.IS_PENDING, 1);
+        }
 
         Uri collection = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
         Uri itemUri = resolver.insert(collection, values);
@@ -159,9 +163,11 @@ public class StorageManager {
 
         try {
             copyFileToUri(tempFile, itemUri);
-            ContentValues finalizeValues = new ContentValues();
-            finalizeValues.put(MediaStore.Video.Media.IS_PENDING, 0);
-            resolver.update(itemUri, finalizeValues, null, null);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContentValues finalizeValues = new ContentValues();
+                finalizeValues.put(MediaStore.Video.Media.IS_PENDING, 0);
+                resolver.update(itemUri, finalizeValues, null, null);
+            }
             Map<String, Object> payload = new HashMap<>();
             payload.put("uri", itemUri.toString());
             payload.put("displayName", displayName);
@@ -212,8 +218,8 @@ public class StorageManager {
         Cursor cursor = context.getContentResolver().query(
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
                 projection,
-                MediaStore.Video.Media.RELATIVE_PATH + " LIKE ?",
-                new String[]{DEFAULT_FOLDER + "%"},
+                MediaStore.Video.Media.RELATIVE_PATH + "=?",
+                new String[]{DEFAULT_FOLDER},
                 MediaStore.Video.Media.DATE_ADDED + " DESC"
         );
 

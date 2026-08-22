@@ -256,7 +256,12 @@ public class ScreenRecordingService extends Service {
         }
         recorderStarted = false;
 
-        releaseResources(true);
+        // Release encoder/display resources but keep the MediaProjection alive for now.
+        // On Android 14+ stopping the projection revokes the "project_media" app-op that
+        // the consent dialog granted, and any later
+        // startForeground(FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) then throws a
+        // SecurityException ("requires permissions ... project_media").
+        releaseResources(false);
 
         if (stopError != null) {
             handleFailure("Recording could not be finalized.", stopError);
@@ -265,7 +270,11 @@ public class ScreenRecordingService extends Service {
 
         RecordingController.updateState(this, RecordingController.State.SAVING, "Saving video");
         try {
-            startForegroundWithProjectionType(buildNotification("Saving video", true));
+            // The service is already foreground; refresh the notification through
+            // NotificationManager instead of startForeground() so the system does not
+            // re-validate the mediaProjection foreground service type after the
+            // projection has been released.
+            updateNotification(buildNotification("Saving video", false));
             Map<String, Object> saved = storageManager.finalizeRecording(tempFile);
             String uriString = saved.get("uri") == null ? null : saved.get("uri").toString();
             String displayName = saved.get("displayName") == null ? "Recording" : saved.get("displayName").toString();
@@ -275,9 +284,14 @@ public class ScreenRecordingService extends Service {
                     displayName);
             RecorderTileService.requestTileRefresh(this);
         } catch (Exception error) {
+            releaseResources(true);
             handleSaveFailure(error);
             return;
         }
+
+        // Saving is done and startForeground() will not be called again, so the
+        // projection can finally be released.
+        releaseResources(true);
 
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
@@ -386,6 +400,19 @@ public class ScreenRecordingService extends Service {
             );
         } else {
             startForeground(NOTIFICATION_ID, notification);
+        }
+    }
+
+    /**
+     * Updates the existing foreground notification without calling startForeground().
+     * Safe to use after the MediaProjection has been stopped, because unlike
+     * startForeground(FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION) it does not re-check
+     * the project_media app-op that Android revokes once the projection ends.
+     */
+    private void updateNotification(Notification notification) {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) {
+            manager.notify(NOTIFICATION_ID, notification);
         }
     }
 
